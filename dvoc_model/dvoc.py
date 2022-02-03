@@ -6,9 +6,9 @@ from dvoc_model.constants import *
 class Dvoc:
     def __init__(self,
                  eps: float = 15.,
-                 k_v: float = 80.,
+                 k_v: float = 120.,
                  k_i: float = 0.2,
-                 v_nom: float = 80.,
+                 v_nom: float = 120.,
                  hz_nom: float = 60,
                  varphi: float = pi / 2,
                  l: float = 26.268e-6,
@@ -20,7 +20,7 @@ class Dvoc:
         self.omega_nom = 1 / sqrt(l*c)
 
         # initialize state variables
-        self.v = Dq0(SQRT_2*80, 0, 0).to_alpha_beta(SinCos.from_theta(0))
+        self.v = Dq0(SQRT_2*v_nom, 0, 0).to_alpha_beta(SinCos.from_theta(0))
 
         # calculate oscillator constants
         self.k0 = eps/(k_v**2)
@@ -32,7 +32,6 @@ class Dvoc:
 
 
     def step(self, dt, i_err):
-            
         tmp = self.k0 * (self.two_v_nom_srd - self.v.alpha**2 - self.v.beta**2)
         dadt = tmp * self.v.alpha \
                 - self.omega_nom * self.v.beta \
@@ -44,7 +43,6 @@ class Dvoc:
 
         self.v.alpha += dadt * dt
         self.v.beta += dbdt * dt
-
 
 
 if __name__ == "__main__":
@@ -61,12 +59,12 @@ if __name__ == "__main__":
     ts = np.arange(0, 500e-3, dt)
 
     # grid parameters
-    grid = Dq0(SQRT_2*80, 0, 0)
+    grid = Dq0(SQRT_2*120, 0, 0)
     grid_omega = TWO_PI * 60
 
     # create a step function for dispatch (3A to 6A)
-    ias = 3 * np.ones(len(ts))
-    ias[len(ts)//2:] = 6
+    ias = 0 * np.ones(len(ts))
+    ias[len(ts)//2:] = 3
 
     # create an oscillator using the defaults
     dvoc = Dvoc()
@@ -77,10 +75,12 @@ if __name__ == "__main__":
             'v_c': [],
             'i_a': [],
             'i_b': [],
-            'i_c': []}
+            'i_c': [],
+            'P': [],
+            'Q': []}
 
     # run simulation
-    i = AlphaBeta(0, 0, 0)  # start out current at 0A
+    i = AlphaBeta(ias[0], 0, 0)  # start out current at 0A
     for ia, t in zip(ias, ts):
 
         # update the grid voltage
@@ -91,27 +91,42 @@ if __name__ == "__main__":
         i_ref = Dq0(ia, 0, 0).to_alpha_beta(sin_cos)
         i_err = i - i_ref
 
-        # update the virtual oscillator
-        dvoc.step(dt, i_err)
+        # get the inverter voltage
         v = dvoc.v
 
         # simulate the currents
         i.alpha += (dt/Lf*(v.alpha - vg.alpha - Rf*i.alpha))
         i.beta += (dt/Lf*(v.beta - vg.beta - Rf*i.beta))
 
+        # update the virtual oscillator
+        dvoc.step(dt, i_err)
+
         # update the data
         v_abc = v.to_abc()
         i_abc = i.to_abc()
+        p_calc = 1.5 * (v.alpha * i.alpha + v.beta * i.beta)
+        q_calc = 1.5 * (v.beta * i.alpha - v.alpha * i.beta)
         data['v_a'].append(v_abc.a)
         data['v_b'].append(v_abc.b)
         data['v_c'].append(v_abc.c)
         data['i_a'].append(i_abc.a)
         data['i_b'].append(i_abc.b)
         data['i_c'].append(i_abc.c)
+        data['P'].append(p_calc)
+        data['Q'].append(q_calc)
 
     # plot the results
     data = pd.DataFrame(index=ts, data=data)
     ax = data.plot(y='i_a')
     data.plot(y='i_b', ax=ax)
     data.plot(y='i_c', ax=ax)
+
+    if True:
+        ax = data.plot(y='v_a')
+        data.plot(y='v_b', ax=ax)
+        data.plot(y='v_c', ax=ax)
+    plot_power = True
+    if plot_power:
+        ax = data.plot(y='P')
+        data.plot(y='Q', ax=ax)
     mp.show()

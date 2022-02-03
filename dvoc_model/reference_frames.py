@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from math import sin, cos, pi, sqrt
+from numpy import sin, cos, arctan2, pi, sqrt
 from dvoc_model.constants import *
 
 @dataclass
@@ -44,6 +44,11 @@ class AlphaBeta:
         z = self.gamma
         return Dq0(d, q, z)
 
+    def to_polar(self):
+        v = sqrt(self.alpha**2 + self.beta**2) / sqrt(2)
+        theta = arctan2(self.beta, self.alpha)
+        return v, theta
+
     def to_abc(self):
         a = self.alpha + self.gamma
         b = -ONE_HALF * self.alpha + SQRT_3_OVER_2 * self.beta + self.gamma
@@ -54,8 +59,22 @@ class AlphaBeta:
         alpha = self.alpha - other.alpha
         beta = self.beta - other.beta
         gamma = self.gamma - other.gamma
-
         return AlphaBeta(alpha, beta, gamma)
+
+    def __add__(self, other):
+        alpha = self.alpha + other.alpha
+        beta = self.beta + other.beta
+        gamma = self.gamma + other.gamma
+        return AlphaBeta(alpha, beta, gamma)
+
+    def __mul__(self, other):
+        if isinstance(other, (int, float, complex)):
+            alpha = self.alpha * other
+            beta = self.beta * other
+            gamma = self.gamma * other
+            return AlphaBeta(alpha, beta, gamma)
+        elif isinstance(other, AlphaBeta):
+            throw(NotImplemented)
 
 @dataclass
 class Dq0:
