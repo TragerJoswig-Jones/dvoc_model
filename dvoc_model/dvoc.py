@@ -1,132 +1,232 @@
 from math import pi, sin, cos
+import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import *
+from simulate import simulate
+from elements import Node, RefFrames
 
-class Dvoc:
+
+class Dvoc(Node):
     def __init__(self,
+                 p_ref,
+                 q_ref,
                  eps: float = 15.,
+                 xi: float = 1.,
                  k_v: float = 120.,
                  k_i: float = 0.2,
                  v_nom: float = 120.,
                  hz_nom: float = 60,
                  varphi: float = pi / 2,
                  l: float = 26.268e-6,
-                 c: float = 0.2679
+                 c: float = 0.2679,
+                 ref: RefFrames = RefFrames.POLAR,
+                 start_eq: bool = True,
+                 dt: float = 1.0 / 10e3,
                  ):
-
-        self.v_nom = v_nom
+        self.v_nom = v_nom  # RMS amplitude, v_nom
         self.hz_nom = hz_nom
-        self.omega_nom = 1 / sqrt(l*c)
+        l = (1 / (hz_nom * 2 * np.pi))**2 / c  # Adjust l to make omega_nom exactly 60 Hz
+        self.omega_nom = 1 / sqrt(l * c)
+        self.c = c
 
-        # initialize state variables
-        self.v = Dq0(SQRT_2*v_nom, 0, 0).to_alpha_beta(SinCos.from_theta(0))
+        # initialize state variables, V (Peak Voltage), Theta (Radians)
+        super().__init__(self.v_nom, 0, ref)
 
-        # calculate oscillator constants
-        self.k0 = eps/(k_v**2)
-        self.k1 = k_v * k_i / c
-        self.two_v_nom_srd = 2*self.v_nom**2
+        # set dvoc controller parameters
+        self.eps = eps
+        self.xi = xi
+        self.k_i = k_i
+        self.k_v = k_v
         self.sin_phi = sin(varphi)
         self.cos_phi = cos(varphi)
 
+        # initialize power tracking variables
+        self.p = 0
+        self.q = 0
 
+        self.line = None
+        self.p_ref = p_ref
+        self.q_ref = q_ref
+        self.dt = dt
+        if ref is RefFrames.POLAR:
+            if start_eq:
+                self.theta += self.omega_nom / 2 * self.dt
+            self.states = np.array([self.v, self.theta])
+        else:
+            if start_eq:
+                v = AlphaBeta.from_polar(self.v_nom, self.omega_nom / 2 * self.dt)
+                self.v_alpha = v.alpha
+                self.v_beta = v.beta
+            self.states = np.array([self.v_alpha, self.v_beta])
 
-    def step(self, dt, i_err):
-        tmp = self.k0 * (self.two_v_nom_srd - self.v.alpha**2 - self.v.beta**2)
-        dadt = tmp * self.v.alpha \
-                - self.omega_nom * self.v.beta \
-                - self.k1 * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+    def update_states(self):
+        if self.ref is RefFrames.POLAR:
+            self.v = self.states[0]
+            self.theta = self.states[1]
+        elif self.ref is RefFrames.ALPHA_BETA:
+            self.v_alpha = self.states[0]
+            self.v_beta = self.states[1]
 
-        dbdt = tmp * self.v.beta \
-                + self.omega_nom * self.v.alpha \
-                - self.k1 * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+    def polar_dynamics(self, x=None, t=None, u=None):
+        i = self.line.i_alpha_beta()
+        p_ref = self.p_ref
+        q_ref = self.q_ref
 
-        self.v.alpha += dadt * dt
-        self.v.beta += dbdt * dt
+        if x is None:
+            v_ab = AlphaBeta.from_polar(self.v, self.theta)
+        else:
+            v_ab = AlphaBeta.from_polar(x[0], x[1])
+
+        # Power Calculation
+        self.p = 1.5 * (v_ab.alpha * i.alpha + v_ab.beta * i.beta)
+        self.q = 1.5 * (v_ab.beta * i.alpha - v_ab.alpha * i.beta)
+
+        # Dvoc Control
+        kvki_3cv = self.k_v * self.k_i / (3 * self.c * self.v)
+        # TODO: Test without squaring voltages
+        # v_dt = self.eps / self.k_v ** 2 * self.v * (2 * self.v_nom ** 2 - 2 * self.v **2) - kvki_3cv * (self.q - q_ref)
+        v_dt = self.eps / self.k_v ** 2 * self.v * (2 * self.v_nom ** 2 - 2 * self.v ** 2) - kvki_3cv * (self.q - q_ref)
+        theta_dt = self.omega_nom - kvki_3cv / self.v * (self.p - p_ref)
+
+        return np.array([v_dt, theta_dt])
+
+    def alpha_beta_dynamics(self, x=None, t=None, u=None):
+        i = self.line.i_alpha_beta()
+        if x is None:
+            v = self.v_alpha_beta()
+            v_alpha = self.v_alpha
+            v_beta = self.v_beta
+        else:
+            v = AlphaBeta(x[0], x[1], 0)
+            v_alpha = x[0]
+            v_beta = x[1]
+
+        p_ref = self.p_ref
+        q_ref = self.q_ref
+
+        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
+        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
+        i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+        i_err = i - i_ref
+
+        tmp = self.eps / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
+        dadt = tmp * v_alpha \
+               - self.omega_nom * v_beta \
+               - self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+
+        dbdt = tmp * v_beta \
+               + self.omega_nom * v_alpha \
+               - self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+
+        return np.array([dadt, dbdt])
+
+    def tustin_dynamics(self, x=None, t=None, u=None):
+        """ Not Implemented Yet """
+        i = self.line.i_alpha_beta()
+        if x is None:
+            v = self.v_alpha_beta()
+            v_alpha = self.v_alpha
+            v_beta = self.v_beta
+        else:
+            v = AlphaBeta(x[0], x[1], 0)
+            v_alpha = x[0]
+            v_beta = x[1]
+        dt = self.dt
+
+        p_ref = self.p_ref
+        q_ref = self.q_ref
+
+        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
+        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
+        i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+        i_err = i - i_ref
+
+        u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+        u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+
+        if self.ref == RefFrames.ALPHA_BETA:
+            temp1 = 1 - 0.5 * dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp2 = 0.5 * dt * self.omega_nom
+            temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
+            temp4 = 1 + 0.5 * dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+
+            temp5 = temp4 * v_alpha - temp2 * v_beta - dt * u1
+            temp6 = temp2 * v_alpha + temp4 * v_beta - dt * u2
+
+            va = temp3 * (temp1 * temp5 - temp2 * temp6)
+            vb = temp3 * (temp2 * temp5 + temp1 * temp6)
+
+            return np.array([va, vb])
+        elif self.ref == RefFrames.POLAR:
+            NotImplementedError()
+
+    def backward_dynamics(self, x=None, t=None, u=None):
+        """ Not Implemented Yet """
+        i = self.line.i_alpha_beta()
+        if x is None:
+            v = self.v_alpha_beta()
+            v_alpha = self.v_alpha
+            v_beta = self.v_beta
+        else:
+            v = AlphaBeta(x[0], x[1], 0)
+            v_alpha = x[0]
+            v_beta = x[1]
+        dt = self.dt
+
+        p_ref = self.p_ref
+        q_ref = self.q_ref
+
+        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
+        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
+        i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+        i_err = i - i_ref
+
+        u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+        u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+
+        if self.ref == RefFrames.ALPHA_BETA:
+
+            temp1 = 1 - dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp2 = dt * self.omega_nom
+            temp3 = 1 / (temp1**2 + temp2**2)
+
+            va = temp3 * (temp1 * (v_alpha - dt * u1) - temp2 * (v_beta - dt * u2))
+            vb = temp3 * (temp1 * (v_beta - dt * u2) + temp2 * (v_alpha - dt * u1))
+
+            return np.array([va, vb])
+        elif self.ref == RefFrames.POLAR:
+            NotImplementedError()
 
 
 if __name__ == "__main__":
     import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as mp
+    from matplotlib import pyplot as plt
 
-    # filter values
-    Lf = 1.5e-3
-    Rf = 0.4
-
-    # simulation parameters
-    dt = 1 / 10e3
-    ts = np.arange(0, 500e-3, dt)
+    v_nom = 120
+    omega_c = 2 * pi * 30  # Changing this value changes how quickly P & Q filt reach the average cycle values
+    q_ = 0
 
     # grid parameters
-    grid = Dq0(SQRT_2*120, 0, 0)
+    grid = Dq0(SQRT_2 * v_nom, 0, 0)
     grid_omega = TWO_PI * 60
 
+    # simulation time parameters
+    dt = 1 / 10e3
+    t = 1000e-3
+    ts = np.arange(0, t, dt)
+    steps = len(ts)
+
     # create a step function for dispatch (3A to 6A)
-    ias = 0 * np.ones(len(ts))
-    ias[len(ts)//2:] = 3
+    q_ref = q_ * np.ones(steps)
+    p_ref = 100 * np.ones(steps)
 
-    # create an oscillator using the defaults
-    dvoc = Dvoc()
+    p_ref[len(ts) // 8:] = 250  # Add a step in the Active Power reference
+    p_ref[len(ts) // 4:] = 500  # Add a step in the Active Power reference
+    p_ref[len(ts) // 2:] = 750  # Add a step in the Active Power reference
 
-    # dictionary for containing simulation results
-    data = {'v_a': [],
-            'v_b': [],
-            'v_c': [],
-            'i_a': [],
-            'i_b': [],
-            'i_c': [],
-            'P': [],
-            'Q': []}
+    controller = Dvoc(p_ref[0], q_ref[0])
 
-    # run simulation
-    i = AlphaBeta(ias[0], 0, 0)  # start out current at 0A
-    for ia, t in zip(ias, ts):
+    data = simulate(controller, p_ref, q_ref, dt, t, Rf=0.4)  # Critical Rf value found to be 0.24-0.25
 
-        # update the grid voltage
-        sin_cos = SinCos.from_theta(grid_omega * t)
-        vg = grid.to_alpha_beta(sin_cos)
-
-        # calculate the current error
-        i_ref = Dq0(ia, 0, 0).to_alpha_beta(sin_cos)
-        i_err = i - i_ref
-
-        # get the inverter voltage
-        v = dvoc.v
-
-        # simulate the currents
-        i.alpha += (dt/Lf*(v.alpha - vg.alpha - Rf*i.alpha))
-        i.beta += (dt/Lf*(v.beta - vg.beta - Rf*i.beta))
-
-        # update the virtual oscillator
-        dvoc.step(dt, i_err)
-
-        # update the data
-        v_abc = v.to_abc()
-        i_abc = i.to_abc()
-        p_calc = 1.5 * (v.alpha * i.alpha + v.beta * i.beta)
-        q_calc = 1.5 * (v.beta * i.alpha - v.alpha * i.beta)
-        data['v_a'].append(v_abc.a)
-        data['v_b'].append(v_abc.b)
-        data['v_c'].append(v_abc.c)
-        data['i_a'].append(i_abc.a)
-        data['i_b'].append(i_abc.b)
-        data['i_c'].append(i_abc.c)
-        data['P'].append(p_calc)
-        data['Q'].append(q_calc)
-
-    # plot the results
-    data = pd.DataFrame(index=ts, data=data)
-    ax = data.plot(y='i_a')
-    data.plot(y='i_b', ax=ax)
-    data.plot(y='i_c', ax=ax)
-
-    if True:
-        ax = data.plot(y='v_a')
-        data.plot(y='v_b', ax=ax)
-        data.plot(y='v_c', ax=ax)
-    plot_power = True
-    if plot_power:
-        ax = data.plot(y='P')
-        data.plot(y='Q', ax=ax)
-    mp.show()
+    plt.show()
