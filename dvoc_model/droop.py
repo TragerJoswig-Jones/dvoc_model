@@ -1,8 +1,8 @@
 from math import pi, sin, cos
 import numpy as np
 
-from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
-from dvoc_model.constants import *
+from reference_frames import SinCos, Abc, Dq0, AlphaBeta
+from constants import *
 from simulate import simulate
 from elements import Node, RefFrames
 

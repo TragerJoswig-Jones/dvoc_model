@@ -3,8 +3,8 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import *
-from simulate import simulate
-from elements import Node, RefFrames
+from dvoc_model.simulate import simulate
+from dvoc_model.elements import Node, RefFrames
 
 
 class Dvoc(Node):
@@ -31,7 +31,11 @@ class Dvoc(Node):
         self.c = c
 
         # initialize state variables, V (Peak Voltage), Theta (Radians)
-        super().__init__(self.v_nom, 0, ref)
+        if ref is RefFrames.POLAR:
+            super().__init__((self.v_nom, 0), ref)
+        else:
+            v = AlphaBeta.from_polar(self.v_nom, 0)
+            super().__init__((v.alpha, v.beta), ref)
 
         # set dvoc controller parameters
         self.eps = eps
@@ -50,23 +54,16 @@ class Dvoc(Node):
         self.q_ref = q_ref
         self.dt = dt
         if ref is RefFrames.POLAR:
+            self.state_names = ["v", "theta"]
             if start_eq:
-                self.theta += self.omega_nom / 2 * self.dt
-            self.states = np.array([self.v, self.theta])
+                self.states[1,0] += self.omega_nom / 2 * self.dt
         else:
+            self.state_names = ["v,alpha", "v,beta"]
             if start_eq:
                 v = AlphaBeta.from_polar(self.v_nom, self.omega_nom / 2 * self.dt)
-                self.v_alpha = v.alpha
-                self.v_beta = v.beta
-            self.states = np.array([self.v_alpha, self.v_beta])
-
-    def update_states(self):
-        if self.ref is RefFrames.POLAR:
-            self.v = self.states[0]
-            self.theta = self.states[1]
-        elif self.ref is RefFrames.ALPHA_BETA:
-            self.v_alpha = self.states[0]
-            self.v_beta = self.states[1]
+                self.states[0,0] = v.alpha
+                self.states[1,0] = v.beta
+    
 
     def polar_dynamics(self, x=None, t=None, u=None):
         i = self.line.i_alpha_beta()
@@ -74,20 +71,20 @@ class Dvoc(Node):
         q_ref = self.q_ref
 
         if x is None:
-            v_ab = AlphaBeta.from_polar(self.v, self.theta)
+            v, theta = self.states[:,0]
+            v_ab = AlphaBeta.from_polar(v, theta)
         else:
-            v_ab = AlphaBeta.from_polar(x[0], x[1])
+            v, theta = x[0], x[1]
+            v_ab = AlphaBeta.from_polar(v, theta)
 
         # Power Calculation
         self.p = 1.5 * (v_ab.alpha * i.alpha + v_ab.beta * i.beta)
         self.q = 1.5 * (v_ab.beta * i.alpha - v_ab.alpha * i.beta)
 
-        # Dvoc Control
-        kvki_3cv = self.k_v * self.k_i / (3 * self.c * self.v)
-        # TODO: Test without squaring voltages
-        # v_dt = self.eps / self.k_v ** 2 * self.v * (2 * self.v_nom ** 2 - 2 * self.v **2) - kvki_3cv * (self.q - q_ref)
-        v_dt = self.eps / self.k_v ** 2 * self.v * (2 * self.v_nom ** 2 - 2 * self.v ** 2) - kvki_3cv * (self.q - q_ref)
-        theta_dt = self.omega_nom - kvki_3cv / self.v * (self.p - p_ref)
+        # dVOC Control
+        kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
+        v_dt = self.eps / self.k_v ** 2 * v * (2 * self.v_nom ** 2 - 2 * v ** 2) - kvki_3cv * (self.q - q_ref)
+        theta_dt = self.omega_nom - kvki_3cv / v * (self.p - p_ref)
 
         return np.array([v_dt, theta_dt])
 
@@ -95,18 +92,16 @@ class Dvoc(Node):
         i = self.line.i_alpha_beta()
         if x is None:
             v = self.v_alpha_beta()
-            v_alpha = self.v_alpha
-            v_beta = self.v_beta
+            v_alpha = v.alpha
+            v_beta = v.beta
         else:
-            v = AlphaBeta(x[0], x[1], 0)
-            v_alpha = x[0]
-            v_beta = x[1]
+            v_alpha, v_beta = x[0], x[1]
 
         p_ref = self.p_ref
         q_ref = self.q_ref
 
-        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
-        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
+        ia_ref = 2 * (p_ref * v_alpha + q_ref * v_beta) / (v_alpha ** 2 + v_beta ** 2) / 3
+        ib_ref = 2 * (p_ref * v_beta - q_ref * v_alpha) / (v_alpha ** 2 + v_beta ** 2) / 3
         i_ref = AlphaBeta(ia_ref, ib_ref, 0)
         i_err = i - i_ref
 
@@ -126,8 +121,8 @@ class Dvoc(Node):
         i = self.line.i_alpha_beta()
         if x is None:
             v = self.v_alpha_beta()
-            v_alpha = self.v_alpha
-            v_beta = self.v_beta
+            v_alpha = v.alpha
+            v_beta = v.beta
         else:
             v = AlphaBeta(x[0], x[1], 0)
             v_alpha = x[0]
@@ -166,8 +161,8 @@ class Dvoc(Node):
         i = self.line.i_alpha_beta()
         if x is None:
             v = self.v_alpha_beta()
-            v_alpha = self.v_alpha
-            v_beta = self.v_beta
+            v_alpha = v.alpha
+            v_beta = v.beta
         else:
             v = AlphaBeta(x[0], x[1], 0)
             v_alpha = x[0]
@@ -219,13 +214,11 @@ if __name__ == "__main__":
 
     # create a step function for dispatch (3A to 6A)
     q_ref = q_ * np.ones(steps)
-    p_ref = 100 * np.ones(steps)
+    p_ref = 0 * np.ones(steps)
 
-    p_ref[len(ts) // 8:] = 250  # Add a step in the Active Power reference
-    p_ref[len(ts) // 4:] = 500  # Add a step in the Active Power reference
-    p_ref[len(ts) // 2:] = 750  # Add a step in the Active Power reference
+    p_ref[len(ts) // 2:] = 500  # Add a step in the Active Power reference
 
-    controller = Dvoc(p_ref[0], q_ref[0])
+    controller = Dvoc(p_ref[0], q_ref[0], ref=RefFrames.POLAR, start_eq=False)
 
     data = simulate(controller, p_ref, q_ref, dt, t, Rf=0.4)  # Critical Rf value found to be 0.24-0.25
 
