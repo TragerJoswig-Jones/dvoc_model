@@ -5,6 +5,7 @@ from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import *
 from dvoc_model.simulate import simulate
 from dvoc_model.elements import Node, RefFrames
+from dvoc_model.calculations import calaculate_power, calculate_current
 
 
 class Dvoc(Node):
@@ -63,46 +64,51 @@ class Dvoc(Node):
                 v = AlphaBeta.from_polar(self.v_nom, self.omega_nom / 2 * self.dt)
                 self.states[0,0] = v.alpha
                 self.states[1,0] = v.beta
-    
+
+    def collect_states(self, x):
+        if self.ref is RefFrames.ALPHA_BETA:
+            if x is None:
+                v = self.v_alpha_beta()
+                v_alpha = v.alpha
+                v_beta = v.beta
+            else:
+                v_alpha, v_beta = x[0], x[1]
+            return v_alpha, v_beta
+        elif self.ref is RefFrames.POLAR:
+            if x is None:
+                v, theta = self.states[:,0]
+            else:
+                v, theta = x[0], x[1]
+            return v, theta
+        else:
+            NotImplementedError()
+            return None, None
+
 
     def polar_dynamics(self, x=None, t=None, u=None):
+        v, theta = self.collect_states(x)
+        v_ab = AlphaBeta.from_polar(v, theta)
         i = self.line.i_alpha_beta()
-        p_ref = self.p_ref
-        q_ref = self.q_ref
-
-        if x is None:
-            v, theta = self.states[:,0]
-            v_ab = AlphaBeta.from_polar(v, theta)
-        else:
-            v, theta = x[0], x[1]
-            v_ab = AlphaBeta.from_polar(v, theta)
 
         # Power Calculation
+        self.p, self.q = calculate_power(v_ab, i)
         self.p = 1.5 * (v_ab.alpha * i.alpha + v_ab.beta * i.beta)
         self.q = 1.5 * (v_ab.beta * i.alpha - v_ab.alpha * i.beta)
 
         # dVOC Control
         kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
-        v_dt = self.eps / self.k_v ** 2 * v * (2 * self.v_nom ** 2 - 2 * v ** 2) - kvki_3cv * (self.q - q_ref)
-        theta_dt = self.omega_nom - kvki_3cv / v * (self.p - p_ref)
+        v_dt = self.eps / self.k_v ** 2 * v * (2 * self.v_nom ** 2 - 2 * v ** 2) - kvki_3cv * (self.q - self.q_ref)
+        theta_dt = self.omega_nom - kvki_3cv / v * (self.p - self.p_ref)
 
         return np.array([v_dt, theta_dt])
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
-        i = self.line.i_alpha_beta()
-        if x is None:
-            v = self.v_alpha_beta()
-            v_alpha = v.alpha
-            v_beta = v.beta
-        else:
-            v_alpha, v_beta = x[0], x[1]
+        v_alpha, v_beta = self.gather_states(x)
+        v = AlphaBeta(v_alpha, v_beta, 0)
 
-        p_ref = self.p_ref
-        q_ref = self.q_ref
-
-        ia_ref = 2 * (p_ref * v_alpha + q_ref * v_beta) / (v_alpha ** 2 + v_beta ** 2) / 3
-        ib_ref = 2 * (p_ref * v_beta - q_ref * v_alpha) / (v_alpha ** 2 + v_beta ** 2) / 3
+        ia_ref, ib_ref = calculate_current(v, self.p_ref, self.q_ref)
         i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+        i = self.line.i_alpha_beta()
         i_err = i - i_ref
 
         tmp = self.eps / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
@@ -117,70 +123,79 @@ class Dvoc(Node):
         return np.array([dadt, dbdt])
 
     def tustin_dynamics(self, x=None, t=None, u=None):
-        """ Not Implemented Yet """
+        """ Approximate Tustin / bilinear discretized dynamics of the dVOC controller.
+        Approximations are made when solving for x[t+1]:
+        In the AlphaBeta reference frame voltage magnitude and line currents are assumed constant from x[t] -> x[t+1]
+        In the Polar reference frame voltage magnitude, powers, and voltage magnitudes in the power error term are
+        assumed constant from x[t] -> x[t+1].
+        """
+        x1, x2 = self.gather_states(x)
         i = self.line.i_alpha_beta()
-        if x is None:
-            v = self.v_alpha_beta()
-            v_alpha = v.alpha
-            v_beta = v.beta
-        else:
-            v = AlphaBeta(x[0], x[1], 0)
-            v_alpha = x[0]
-            v_beta = x[1]
-        dt = self.dt
-
-        p_ref = self.p_ref
-        q_ref = self.q_ref
-
-        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
-        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
-        i_ref = AlphaBeta(ia_ref, ib_ref, 0)
-        i_err = i - i_ref
-
-        u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-        u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
         if self.ref == RefFrames.ALPHA_BETA:
-            temp1 = 1 - 0.5 * dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
-            temp2 = 0.5 * dt * self.omega_nom
-            temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
-            temp4 = 1 + 0.5 * dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            v_alpha, v_beta = x1, x2
+            v_ab = AlphaBeta(v_alpha, v_beta, 0)
 
-            temp5 = temp4 * v_alpha - temp2 * v_beta - dt * u1
-            temp6 = temp2 * v_alpha + temp4 * v_beta - dt * u2
+            ia_ref, ib_ref = calculate_current(v_ab, self.p_ref, self.q_ref)
+            i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+            i_err = i - i_ref
+
+            u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+            u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+
+
+            temp1 = 1 - 0.5 * self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp2 = 0.5 * self.dt * self.omega_nom
+            temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
+            temp4 = 1 + 0.5 * self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+
+            temp5 = temp4 * v_alpha - temp2 * v_beta - self.dt * u1
+            temp6 = temp2 * v_alpha + temp4 * v_beta - self.dt * u2
 
             va = temp3 * (temp1 * temp5 - temp2 * temp6)
             vb = temp3 * (temp2 * temp5 + temp1 * temp6)
 
             return np.array([va, vb])
         elif self.ref == RefFrames.POLAR:
-            NotImplementedError()
+            v, theta = x1, x2
+            v_ab = AlphaBeta.from_polar(v, theta)
+
+            # Power Calculation
+            self.p, self.q = calculate_power(v_ab, i)
+
+            u1 = self.p - self.p_ref
+            u2 = self.q - self.q_ref
+
+            # Dynamics Calculation
+            temp1 =   self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
+            temp2 = - self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
+            temp3 = - u1  * self.dt / v
+
+            v_t1 = temp1 / temp2 * v + temp3 / temp2
+            theta_t1 = theta + 0.5 * self.dt * (2.0 * self.omega_nom -  u2 / (v_t1**2) - u2 / (v**2))
+            return v_t1, theta_t1
 
     def backward_dynamics(self, x=None, t=None, u=None):
-        """ Not Implemented Yet """
+        """ Approximate Backward Euler discretized dynamics of the dVOC controller.
+        Approximations in the dynamics equations are made when solving for x[t+1]. These approximations are assuming
+        that some states in the dynamics equations are constant from x[t] -> x[t+1].
+        AlphaBeta reference frame: voltage magnitude and line currents are assumed constant.
+        Polar reference frame: voltage magnitude, powers, and voltage magnitudes in the power error term are
+        assumed constant.
+        """
+        x1, x2 = self.gather_states(x)
         i = self.line.i_alpha_beta()
-        if x is None:
-            v = self.v_alpha_beta()
-            v_alpha = v.alpha
-            v_beta = v.beta
-        else:
-            v = AlphaBeta(x[0], x[1], 0)
-            v_alpha = x[0]
-            v_beta = x[1]
-        dt = self.dt
-
-        p_ref = self.p_ref
-        q_ref = self.q_ref
-
-        ia_ref = 2 * (p_ref * v.alpha + q_ref * v.beta) / (v.alpha ** 2 + v.beta ** 2) / 3
-        ib_ref = 2 * (p_ref * v.beta - q_ref * v.alpha) / (v.alpha ** 2 + v.beta ** 2) / 3
-        i_ref = AlphaBeta(ia_ref, ib_ref, 0)
-        i_err = i - i_ref
-
-        u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-        u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
         if self.ref == RefFrames.ALPHA_BETA:
+            v_alpha, v_beta = x1, x2
+            v_ab = AlphaBeta(v_alpha, v_beta, 0)
+
+            ia_ref, ib_ref = calculate_current(v_ab, self.p_ref, self.q_ref)
+            i_ref = AlphaBeta(ia_ref, ib_ref, 0)
+            i_err = i - i_ref
+
+            u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+            u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
             temp1 = 1 - dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
             temp2 = dt * self.omega_nom
@@ -191,8 +206,22 @@ class Dvoc(Node):
 
             return np.array([va, vb])
         elif self.ref == RefFrames.POLAR:
-            NotImplementedError()
+            v, theta = x1, x2
+            v_ab = AlphaBeta.from_polar(v, theta)
 
+            # Power Calculation
+            self.p, self.q = calculate_power(v_ab, i)
+
+            u1 = self.p - self.p_ref
+            u2 = self.q - self.q_ref
+
+            # Dynamics Calculation
+            temp1 = 1.0 - 2.0 * self.k_i * (self.v_nom**2 - v**2) * self.dt
+            temp2 = - u1  * self.dt / v
+
+            v_t1 = 1 / temp1 * v + temp2 / temp1
+            theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1**2));
+            return v_t1, theta_t1
 
 if __name__ == "__main__":
     import numpy as np
