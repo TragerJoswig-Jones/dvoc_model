@@ -1,10 +1,10 @@
 from math import pi, sin, cos
 import numpy as np
 
-from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
+from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import *
 from dvoc_model.simulate import simulate
-from dvoc_model.elements import Node, RefFrames
+from dvoc_model.elements import Node
 from dvoc_model.calculations import *
 
 

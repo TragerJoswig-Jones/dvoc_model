@@ -1,13 +1,6 @@
-from enum import Enum
-from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
+from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames, convert_state_ref
 from dvoc_model.constants import *
 import numpy as np
-
-
-class RefFrames(Enum):
-    ALPHA_BETA = 1
-    POLAR = 2
-    DQ0 = 3
 
 
 class Component:
@@ -99,6 +92,7 @@ class Grid(Node):
         super().__init__((v, theta), ref)
         self.omega = omega
         self.state_names = ["v", "theta"]
+        self.n_states = len(self.state_names)
 
     def polar_dynamics(self, x=None, t=None, u=None):
         return np.array([0, self.omega])
@@ -121,15 +115,22 @@ class Line(Edge):
         self.lf = lf
         self.fr = fr
         self.to = to
+        self.dependent_cmpnts = [fr, to]
         if self.ref is RefFrames.ALPHA_BETA:
             self.state_names = np.array(["i,alpha", "i,beta"])
+        else:
+            self.state_names = np.array([None, None])
+        self.n_states = len(self.state_names)
 
-    def alpha_beta_dynamics(self, x=(None, None), t=0, u: AlphaBeta = None):
-        v1 = self.fr.v_alpha_beta()
+    def alpha_beta_dynamics(self, x=(None, None), t=0, u=None):
         if u is None:
+            v1 = self.fr.v_alpha_beta()
             v2 = self.to.v_alpha_beta()
         else:
-            v2 = u
+            x_fr = u[0]
+            x_to = u[1]
+            v1 = AlphaBeta(x_fr[0], x_fr[1], 0)
+            v2 = AlphaBeta(x_to[0], x_to[1], 0)
 
         if x is None:
             i_alpha, i_beta = self.states[:,0]
@@ -173,7 +174,10 @@ class LineToGrid:
             v_grid = x[2]
             theta_grid = x[3]
 
-        i_dx_alpha, i_dx_beta = self.line.dynamics([i_alpha, i_beta], t, u=AlphaBeta.from_polar(v_grid, theta_grid))
+        vg_ab = AlphaBeta.from_polar(v_grid, theta_grid)
+        v_ab = self.line.fr.v_alpha_beta()
+        i_dx_alpha, i_dx_beta = self.line.dynamics([i_alpha, i_beta], t, u=[(v_ab.alpha, v_ab.beta),
+                                                                            (vg_ab.alpha, vg_ab.beta)])
         v_dx, theta_dx = self.grid.dynamics([v_grid, theta_grid], t)
 
         return [i_dx_alpha, i_dx_beta, v_dx, theta_dx]
@@ -192,14 +196,56 @@ class Load(Node):
     def __init__(self, r, fr: Line, ref: RefFrames = RefFrames.ALPHA_BETA):
         super().__init__((0, 0), ref)
         self.r = r
-        self.fr = fr  # Line that sources current to the load
+        self.source = source  # Line that sources current to the load
         self.state_names = ["v,alpha", "v,beta"]
+        self.n_states = len(self.state_names)
+        self.dependent_cmpnts = [source]
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
-        i = self.fr.i_alpha_beta()
+        i = self.source.i_alpha_beta()
         v_alpha = i.alpha * self.r
         v_beta = i.beta * self.r
         return np.array([v_alpha, v_beta]) - self.states[:,0]
 
     def v_alpha_beta(self):
         return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+
+
+class System:
+    def __init__(self,
+                 components
+                 ):
+        self.components = components
+        self.states = np.vstack([cmpnt.states for cmpnt in components])
+        curr_state_idx = 0
+        for cmpnt in components:
+            cmpnt.state_idx = curr_state_idx
+            curr_state_idx += cmpnt.n_states
+
+
+    def dynamics(self, t=0, x=None):
+        system_dynamics = []
+        for cmpnt in self.components:
+            cmpnt_states = x[cmpnt.state_idx: cmpnt.state_idx + cmpnt.n_states,0]
+
+            if hasattr(cmpnt, 'dependent_cmpnts'):
+                u = []
+                for dependent_cmpnt in cmpnt.dependent_cmpnts:
+                    if hasattr(dependent_cmpnt, 'state_idx'):
+                        u_cmpnt = x[dependent_cmpnt.state_idx:dependent_cmpnt.state_idx + dependent_cmpnt.n_states,0]
+                    else:
+                        u_cmpnt = dependent_cmpnt.states[:,0]
+                    u_cmpnt_ref = convert_state_ref(u_cmpnt, dependent_cmpnt.ref, cmpnt.ref)
+                    u.append(u_cmpnt_ref)  # TODO: Or use extend and get a full list?
+            else:
+                u = None
+            cmpnt_dxdt = cmpnt.dynamics(cmpnt_states, t, u=u)
+            system_dynamics.append(cmpnt_dxdt)
+
+        return system_dynamics
+
+    def step_states(self):
+        for cmpnt in self.components:
+            # TODO: Make this directly put the new states values in the current index of the cmpnt states?
+            cmpnt.states = self.states[cmpnt.state_idx: cmpnt.state_idx + cmpnt.n_states,:]
+            cmpnt.step_states()

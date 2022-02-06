@@ -1,6 +1,12 @@
 from dataclasses import dataclass
+from enum import Enum
 from numpy import sin, cos, arctan2, pi, sqrt
 from dvoc_model.constants import *
+
+class RefFrames(Enum):
+    ALPHA_BETA = 1
+    POLAR = 2
+    DQ0 = 3
 
 @dataclass
 class SinCos:
@@ -135,6 +141,17 @@ class Abc:
         z = ONE_THIRD * (self.a + self.b + self.c)
 
         return Dq0(d, q, z)
+
+
+def convert_state_ref(x, fr_ref, to_ref):
+    if fr_ref is to_ref:
+        return x
+    if fr_ref is RefFrames.POLAR:
+        x_ab = AlphaBeta.from_polar(x[0], x[1])
+        x_ref = (x_ab.alpha, x_ab.beta)
+    elif fr_ref is RefFrames.ALPHA_BETA:
+        x_ref = AlphaBeta(x[0], x[1], 0).to_polar()
+    return x_ref
 
 
 if __name__ == "__main__":
