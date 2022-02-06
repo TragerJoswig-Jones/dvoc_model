@@ -5,7 +5,7 @@ from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import *
 from dvoc_model.simulate import simulate
 from dvoc_model.elements import Node, RefFrames
-from dvoc_model.calculations import calaculate_power, calculate_current
+from dvoc_model.calculations import *
 
 
 class Dvoc(Node):
@@ -92,8 +92,6 @@ class Dvoc(Node):
 
         # Power Calculation
         self.p, self.q = calculate_power(v_ab, i)
-        self.p = 1.5 * (v_ab.alpha * i.alpha + v_ab.beta * i.beta)
-        self.q = 1.5 * (v_ab.beta * i.alpha - v_ab.alpha * i.beta)
 
         # dVOC Control
         kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
@@ -103,7 +101,7 @@ class Dvoc(Node):
         return np.array([v_dt, theta_dt])
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
-        v_alpha, v_beta = self.gather_states(x)
+        v_alpha, v_beta = self.collect_states(x)
         v = AlphaBeta(v_alpha, v_beta, 0)
 
         ia_ref, ib_ref = calculate_current(v, self.p_ref, self.q_ref)
@@ -129,7 +127,7 @@ class Dvoc(Node):
         In the Polar reference frame voltage magnitude, powers, and voltage magnitudes in the power error term are
         assumed constant from x[t] -> x[t+1].
         """
-        x1, x2 = self.gather_states(x)
+        x1, x2 = self.collect_states(x)
         i = self.line.i_alpha_beta()
 
         if self.ref == RefFrames.ALPHA_BETA:
@@ -183,7 +181,7 @@ class Dvoc(Node):
         Polar reference frame: voltage magnitude, powers, and voltage magnitudes in the power error term are
         assumed constant.
         """
-        x1, x2 = self.gather_states(x)
+        x1, x2 = self.collect_states(x)
         i = self.line.i_alpha_beta()
 
         if self.ref == RefFrames.ALPHA_BETA:
@@ -223,6 +221,7 @@ class Dvoc(Node):
             theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1**2));
             return v_t1, theta_t1
 
+
 if __name__ == "__main__":
     import numpy as np
     from matplotlib import pyplot as plt
@@ -247,7 +246,7 @@ if __name__ == "__main__":
 
     p_ref[len(ts) // 2:] = 500  # Add a step in the Active Power reference
 
-    controller = Dvoc(p_ref[0], q_ref[0], ref=RefFrames.POLAR, start_eq=False)
+    controller = Dvoc(p_ref[0], q_ref[0], ref=RefFrames.ALPHA_BETA, start_eq=True)
 
     data = simulate(controller, p_ref, q_ref, dt, t, Rf=0.4)  # Critical Rf value found to be 0.24-0.25
 

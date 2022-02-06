@@ -40,7 +40,7 @@ class Component:
         self.states[:,0] = self.states[:,1]
         self.states[:,1] = None
         if self.ref is RefFrames.POLAR:
-            self.states[:,0] %= (2*np.pi)
+            self.states[1,0] %= (2*np.pi)
 
 
 class Node(Component):
@@ -183,3 +183,23 @@ class LineToGrid:
         self.grid.states = self.states[2:,:]
         self.line.step_states()
         self.grid.step_states()
+
+
+class Load(Node):
+    """ Resistive load object
+    TODO: Update this do have a reactive component?
+    """
+    def __init__(self, r, fr: Line, ref: RefFrames = RefFrames.ALPHA_BETA):
+        super().__init__((0, 0), ref)
+        self.r = r
+        self.fr = fr  # Line that sources current to the load
+        self.state_names = ["v,alpha", "v,beta"]
+
+    def alpha_beta_dynamics(self, x=None, t=None, u=None):
+        i = self.fr.i_alpha_beta()
+        v_alpha = i.alpha * self.r
+        v_beta = i.beta * self.r
+        return np.array([v_alpha, v_beta]) - self.states[:,0]
+
+    def v_alpha_beta(self):
+        return AlphaBeta(self.states[0,0], self.states[1,0], 0)

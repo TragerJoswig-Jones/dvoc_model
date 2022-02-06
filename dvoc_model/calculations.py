@@ -1,4 +1,3 @@
-
 def calculate_power(v, i):
     p = 1.5 * (v.alpha * i.alpha + v.beta * i.beta)
     q = 1.5 * (v.beta * i.alpha - v.alpha * i.beta)

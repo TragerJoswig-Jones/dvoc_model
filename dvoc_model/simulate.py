@@ -5,8 +5,9 @@ import matplotlib.pyplot as mp
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import TWO_PI
-from dvoc_model.elements import Grid, Line
+from dvoc_model.elements import Grid, Line, LineToGrid
 from dvoc_model.integration_methods import forward_euler_step
+from dvoc_model.calculations import calculate_power
 
 
 """ ODE Solvers """
@@ -54,8 +55,12 @@ def ode_solver_system(dt, system, params={}, set_states=True, update_states=Fals
 
 
 def simulate(controller, p_refs, q_refs, dt=1 / 10e3, t=500e-3, Lf=1.5e-3, Rf=0.8,
-             grid_omega=TWO_PI * 60, id0=0, iq0=0, discretization_step=ode_solver_step):
+             grid_omega=TWO_PI * 60, v_nom=120., id0=0, iq0=0, discretization_step=ode_solver_step):
     ts = np.arange(0, t, dt)
+
+    atol = 1e-3
+    rtol = 1e-3
+    params = {'rtol': rtol, 'atol': atol}
 
     # dictionary for containing simulation results
     data = {'v_a': [],
@@ -88,15 +93,17 @@ def simulate(controller, p_refs, q_refs, dt=1 / 10e3, t=500e-3, Lf=1.5e-3, Rf=0.
         controller.q_ref = q_ref
         v = controller.v_alpha_beta()
         v_abc = v.to_abc()
-        i_abc = line.i_alpha_beta().to_abc()
+        i = line.i_alpha_beta()
+        i_abc = i.to_abc()
+        p, q = calculate_power(v, i)
         data['v_a'].append(v_abc.a)
         data['v_b'].append(v_abc.b)
         data['v_c'].append(v_abc.c)
         data['i_a'].append(i_abc.a)
         data['i_b'].append(i_abc.b)
         data['i_c'].append(i_abc.c)
-        data['p'].append(controller.p)
-        data['q'].append(controller.q)
+        data['p'].append(p)
+        data['q'].append(q)
 
     # plot the results
     data = pd.DataFrame(index=ts, data=data)
