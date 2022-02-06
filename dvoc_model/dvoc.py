@@ -141,7 +141,6 @@ class Dvoc(Node):
             u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
             u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
-
             temp1 = 1 - 0.5 * self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
             temp2 = 0.5 * self.dt * self.omega_nom
             temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
@@ -161,8 +160,8 @@ class Dvoc(Node):
             # Power Calculation
             self.p, self.q = calculate_power(v_ab, i)
 
-            u1 = self.p - self.p_ref
-            u2 = self.q - self.q_ref
+            u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c)
+            u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c)
 
             # Dynamics Calculation
             temp1 =   self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
@@ -195,12 +194,12 @@ class Dvoc(Node):
             u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
             u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
-            temp1 = 1 - dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
-            temp2 = dt * self.omega_nom
+            temp1 = 1 - self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp2 = self.dt * self.omega_nom
             temp3 = 1 / (temp1**2 + temp2**2)
 
-            va = temp3 * (temp1 * (v_alpha - dt * u1) - temp2 * (v_beta - dt * u2))
-            vb = temp3 * (temp1 * (v_beta - dt * u2) + temp2 * (v_alpha - dt * u1))
+            va = temp3 * (temp1 * (v_alpha - self.dt * u1) - temp2 * (v_beta - self.dt * u2))
+            vb = temp3 * (temp1 * (v_beta - self.dt * u2) + temp2 * (v_alpha - self.dt * u1))
 
             return np.array([va, vb])
         elif self.ref == RefFrames.POLAR:
@@ -210,8 +209,8 @@ class Dvoc(Node):
             # Power Calculation
             self.p, self.q = calculate_power(v_ab, i)
 
-            u1 = self.p - self.p_ref
-            u2 = self.q - self.q_ref
+            u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c * v)
+            u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c * v)
 
             # Dynamics Calculation
             temp1 = 1.0 - 2.0 * self.k_i * (self.v_nom**2 - v**2) * self.dt
