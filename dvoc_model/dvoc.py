@@ -120,7 +120,7 @@ class Dvoc(Node):
 
         return np.array([dadt, dbdt])
 
-    def tustin_dynamics(self, x=None, t=None, u=None):
+    def tustin_step(self, x=None, t=None, u=None):
         """ Approximate Tustin / bilinear discretized dynamics of the dVOC controller.
         Approximations are made when solving for x[t+1]:
         In the AlphaBeta reference frame voltage magnitude and line currents are assumed constant from x[t] -> x[t+1]
@@ -160,19 +160,20 @@ class Dvoc(Node):
             # Power Calculation
             self.p, self.q = calculate_power(v_ab, i)
 
+            # Power Errors
             u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c)
             u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c)
 
-            # Dynamics Calculation
+            # Implicit Step Calculation
             temp1 =   self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
             temp2 = - self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
             temp3 = - u1  * self.dt / v
 
             v_t1 = temp1 / temp2 * v + temp3 / temp2
             theta_t1 = theta + 0.5 * self.dt * (2.0 * self.omega_nom -  u2 / (v_t1**2) - u2 / (v**2))
-            return v_t1, theta_t1
+            return np.array([v_t1, theta_t1])
 
-    def backward_dynamics(self, x=None, t=None, u=None):
+    def backward_step(self, x=None, t=None, u=None):
         """ Approximate Backward Euler discretized dynamics of the dVOC controller.
         Approximations in the dynamics equations are made when solving for x[t+1]. These approximations are assuming
         that some states in the dynamics equations are constant from x[t] -> x[t+1].
@@ -191,9 +192,11 @@ class Dvoc(Node):
             i_ref = AlphaBeta(ia_ref, ib_ref, 0)
             i_err = i - i_ref
 
+            # Current Error Terms
             u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
             u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
+            # Implicit Step Calculation
             temp1 = 1 - self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
             temp2 = self.dt * self.omega_nom
             temp3 = 1 / (temp1**2 + temp2**2)
@@ -218,7 +221,7 @@ class Dvoc(Node):
 
             v_t1 = 1 / temp1 * v + temp2 / temp1
             theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1**2));
-            return v_t1, theta_t1
+            return np.array([v_t1, theta_t1])
 
 
 if __name__ == "__main__":

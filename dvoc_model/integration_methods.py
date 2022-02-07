@@ -1,3 +1,7 @@
+import scipy.optimize
+import nbkode
+import numpy as np
+
 """ Explicit Solvers """
 
 
@@ -135,7 +139,7 @@ def tustin_step(dt, components, set_states=True, update_states=False):
     dxs = []
     for component in components:
         x0 = component.states[:,0]
-        x1 = component.tustin_dynamics(x0, dt)
+        x1 = component.tustin_step(x=x0)
 
         if set_states:
             component.states[:,1] = x1  # step states
@@ -150,7 +154,7 @@ def backward_step(dt, components, set_states=True, update_states=False):
     dxs = []
     for component in components:
         x0 = component.states[:,0]
-        x1 = component.backward_dynamics(x0, dt)
+        x1 = component.backward_step(x=x0)
 
         if set_states:
             component.states[:,1] = x1  # step states
@@ -160,3 +164,24 @@ def backward_step(dt, components, set_states=True, update_states=False):
             component.step_states()
     return dxs
 
+"""
+# NUMBAKIT ODE SOLVERS
+# TODO: Not working as dvoc_model framework is based around objects
+#       Would need to have independent dynamic function for the whole system,
+#       without relying on classes.
+def nbkode_step(dt, components, set_states=True, update_states=False):
+    dxs = []
+    for component in components:
+        x0 = component.states[:,0]
+        solver = nbkode.ForwardEuler(component.dynamics, 0.0, x0)
+        ts, xs = solver.run([0, dt])
+        x1 = xs[-1]
+        dxs.append(x1 - x0)
+    if set_states:
+        for component, dx in zip(components, dxs):
+            component.states[:,1] = component.states[:,0] + dx
+    if update_states:
+        for component in components:
+            component.step_states()
+    return dxs
+"""

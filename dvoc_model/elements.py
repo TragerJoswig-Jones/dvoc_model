@@ -6,7 +6,7 @@ import numpy as np
 class Component:
     def __init__(self, x=(None, None), ref=RefFrames.ALPHA_BETA):
         self.ref = ref
-        if x is AlphaBeta:
+        if isinstance(x, AlphaBeta):
             if ref is RefFrames.ALPHA_BETA:
                 x1 = np.array([x.alpha, None])
                 x2 = np.array([x.beta, None])
@@ -14,10 +14,12 @@ class Component:
                 x = x.to_polar()
                 x1 = np.array([x[0], None])
                 x2 = np.array([x[1], None])
+            self.states = np.array([x1, x2])
         else:
-            x1 = np.array([x[0], None])
-            x2 = np.array([x[1], None])
-        self.states = np.array([x1, x2])
+            states = []
+            for val in x:
+                states.append([val, None])
+            self.states = np.array(states)
 
     def dynamics(self, x=None, t=None, u=None):
         if self.ref == RefFrames.ALPHA_BETA:
@@ -39,6 +41,13 @@ class Component:
 class Node(Component):
     def __init__(self, x, ref=RefFrames.ALPHA_BETA):
         super().__init__(x, ref)
+
+    def set_line(self, line):
+        self.line = line
+        if hasattr(self, 'dependent_cmpnts'):
+            self.dependent_cmpnts.append(line)
+        else:
+            self.dependent_cmpnts = [line]
 
     def curr_states(self):
         if self.ref is RefFrames.POLAR:
@@ -115,6 +124,8 @@ class Line(Edge):
         self.lf = lf
         self.fr = fr
         self.to = to
+        fr.set_line(self)
+        to.set_line(self)
         self.dependent_cmpnts = [fr, to]
         if self.ref is RefFrames.ALPHA_BETA:
             self.state_names = np.array(["i,alpha", "i,beta"])
@@ -189,23 +200,96 @@ class LineToGrid:
         self.grid.step_states()
 
 
+class LCL_Filter(Edge):
+    def __init__(self,
+                 fr: Node,
+                 to: Node,
+                 rf1: float,
+                 lf1: float,
+                 c: float,
+                 rf2: float = None,
+                 lf2: float = None,
+                 v_nom: float = 120.,
+                 i_ab: AlphaBeta = AlphaBeta.from_polar(0, 0),
+                 ref: RefFrames = RefFrames.ALPHA_BETA
+                 ):
+        v = AlphaBeta.from_polar(v_nom, 0)
+        super().__init__((i_ab.alpha, i_ab.beta, v.alpha, v.beta, i_ab.alpha, i_ab.beta), ref)
+        self.rf1 = rf1
+        self.lf1 = lf1
+        self.rf2 = rf1 if rf2 is None else rf2
+        self.lf2 = lf1 if lf2 is None else lf2
+        self.c = c
+        self.fr = fr
+        self.to = to
+        fr.set_line(self)
+        to.set_line(self)
+        self.dependent_cmpnts = [fr, to]
+
+        if self.ref is RefFrames.ALPHA_BETA:
+            self.state_names = np.array(["i1,alpha", "i1,beta", "v,alpha", "v,beta", "i2,alpha", "i2,beta"])
+        else:
+            self.state_names = np.array([None, None])
+        self.n_states = len(self.state_names)
+
+    def alpha_beta_dynamics(self, x=(None, None), t=0, u=None):
+        if u is None:
+            v1 = self.fr.v_alpha_beta()
+            v2 = self.to.v_alpha_beta()
+        else:
+            x_fr = u[0]
+            x_to = u[1]
+            v1 = AlphaBeta(x_fr[0], x_fr[1], 0)
+            v2 = AlphaBeta(x_to[0], x_to[1], 0)
+
+        if x is None:
+            i1_alpha, i1_beta = self.states[0:2,0]
+            vc_alpha, vc_beta = self.states[2:4:,0]
+            i2_alpha, i2_beta = self.states[4:,0]
+        else:
+            i1_alpha, i1_beta = x[0], x[1]
+            vc_alpha, vc_beta = x[2], x[3]
+            i2_alpha, i2_beta = x[4], x[5]
+
+        i1_dx_alpha = 1/self.lf1*(v1.alpha - vc_alpha - self.rf1*i1_alpha)
+        i1_dx_beta = 1/self.lf1*(v1.beta - vc_beta - self.rf1*i1_beta)
+
+        v_dx_alpha = 1/self.c*(i1_alpha - i2_alpha)
+        v_dx_beta = 1/self.c*(i1_beta - i2_beta)
+
+        i2_dx_alpha = 1/self.lf2*(vc_alpha - v2.alpha - self.rf2*i2_alpha)
+        i2_dx_beta = 1/self.lf2*(vc_beta - v2.beta - self.rf2*i2_beta)
+
+        return np.array([i1_dx_alpha, i1_dx_beta, v_dx_alpha, v_dx_beta, i2_dx_alpha, i2_dx_beta])
+
+    def i_alpha_beta(self):
+        return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+
+
 class Load(Node):
     """ Resistive load object
     TODO: Update this do have a reactive component?
     """
-    def __init__(self, r, fr: Line, ref: RefFrames = RefFrames.ALPHA_BETA):
-        super().__init__((0, 0), ref)
+    def __init__(self, r, v_nom=120., ref: RefFrames = RefFrames.ALPHA_BETA, line: Line = None):
+        super().__init__(AlphaBeta.from_polar(v_nom, 0), ref)
         self.r = r
-        self.source = source  # Line that sources current to the load
+
         self.state_names = ["v,alpha", "v,beta"]
         self.n_states = len(self.state_names)
-        self.dependent_cmpnts = [source]
+
+        if not(line is None):
+            self.line = line  # Line that sources current to the load
+            self.dependent_cmpnts = [line]
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
-        i = self.source.i_alpha_beta()
+        if u is None:
+            i = self.line.i_alpha_beta()
+        else:
+            u = u[0]
+            i = AlphaBeta(u[0], u[1], 0)
         v_alpha = i.alpha * self.r
         v_beta = i.beta * self.r
-        return np.array([v_alpha, v_beta]) - self.states[:,0]
+        return np.array([v_alpha, v_beta]) - x
 
     def v_alpha_beta(self):
         return AlphaBeta(self.states[0,0], self.states[1,0], 0)
@@ -240,7 +324,7 @@ class System:
             else:
                 u = None
             cmpnt_dxdt = cmpnt.dynamics(cmpnt_states, t, u=u)
-            system_dynamics.append(cmpnt_dxdt)
+            system_dynamics.extend(cmpnt_dxdt)
 
         return system_dynamics
 
