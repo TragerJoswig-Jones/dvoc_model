@@ -1,10 +1,11 @@
 from math import pi, sin, cos
 import numpy as np
 
-from reference_frames import SinCos, Abc, Dq0, AlphaBeta
-from constants import *
-from simulate import simulate
-from elements import Node, RefFrames
+from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
+from dvoc_model.constants import *
+from dvoc_model.simulate import simulate, shift_controller_angle_half
+from dvoc_model.elements import Node, RefFrames
+from dvoc_model.calculations import calculate_power
 
 
 class Droop(Node):
@@ -22,36 +23,40 @@ class Droop(Node):
                  start_eq: bool = True,
                  ):
 
-        self.v_nom = v_nom
-        self.hz_nom = hz_nom
-        #self.omega_nom = 1 / sqrt(l*c)
-        self.omega_nom = 2 * pi * hz_nom  # TODO: Check if this is correct for droop control
-        self.p_ref = p_ref
-        self.q_ref = q_ref
-        self.line = None
-
-
-        # initialize state variables
-        #self.v = v_nom  # TODO: Should this be sqrt(2) * v_nom?
-        #self.theta = 0
-        super().__init__(v_nom*SQRT_2, 0, ref)
-
         # set droop controller parameters
+        self.v_nom = v_nom
+        self.omega_nom = 2 * pi * hz_nom
+        self.omega_c = omega_c
         self.m_p = m_p
         self.m_q = m_q
         self.sin_phi = sin(varphi)
         self.cos_phi = cos(varphi)
 
+        self.p_ref = p_ref
+        self.q_ref = q_ref
+        self.dt = dt
+        self.line = None
+
         # set low-pass filter initial values
-        self.omega_c = omega_c
-        self.p_filt = 0
-        self.q_filt = 0
+        p_filt = 0
+        q_filt = 0
         self.p = 0
         self.q = 0
 
+        # initialize state variables
+        if ref is RefFrames.POLAR:
+            super().__init__((self.v_nom, 0, p_filt, q_filt), ref)
+        else:
+            v = AlphaBeta.from_polar(self.v_nom, 0)
+            super().__init__((v.alpha, v.beta, p_filt, q_filt), ref)
+
         if start_eq:
-            self.theta += self.omega_nom / 2 * dt
-        self.states = np.array([self.v, self.theta, self.p_filt, self.q_filt])
+            shift_controller_angle_half(self, self.ref, self.omega_nom, self.dt)
+
+        if ref is RefFrames.POLAR:
+            self.state_names = ["v", "theta", "p,filt", "q,filt"]
+        else:
+            self.state_names = ["v,alpha", "v,beta", "p,filt", "q,filt"]
 
     def low_pass_dynamics(self, x, y_filt):  # TODO: Search how to derive discretization of low pass
         return self.omega_c * (x - y_filt)
@@ -90,34 +95,25 @@ class Droop(Node):
     def polar_dynamics(self, x=None, t=None, u=None):
         # Power Calculation
         if x is None:
-            v_ab = AlphaBeta.from_polar(self.v, self.theta)
-            v = self.v
-            theta = self.theta
-            p_filt = self.p_filt
-            q_filt = self.q_filt
-        else:
-            v_ab = AlphaBeta.from_polar(x[0], x[1])
-            v = x[0]
-            theta = x[1]
-            p_filt = x[2]
-            q_filt = x[3]
+            x = self.states[:, 0]
+        v_ab = AlphaBeta.from_polar(x[0], x[1])
+        v = x[0]
+        theta = x[1]
+        p_filt = x[2]
+        q_filt = x[3]
 
         i = self.line.i_alpha_beta()
-        p_calc = 1.5 * (v_ab.alpha * i.alpha + v_ab.beta * i.beta)
-        q_calc = 1.5 * (v_ab.beta * i.alpha - v_ab.alpha * i.beta)
-
-        self.p = p_calc
-        self.q = q_calc
+        p, q = calculate_power(v_ab, i)
 
         # Low-Pass Filter
-        p_filt_dt = self.low_pass_dynamics(p_calc, p_filt)
-        q_filt_dt = self.low_pass_dynamics(q_calc, q_filt)
+        p_filt_dt = self.low_pass_dynamics(p, p_filt)
+        q_filt_dt = self.low_pass_dynamics(q, q_filt)
 
-        p_err = self.p_filt - self.p_ref
-        q_err = self.q_filt - self.q_ref
+        p_err = p_filt - self.p_ref
+        q_err = q_filt - self.q_ref
 
         # Droop Control
-        dvdt = (self.v_nom*SQRT_2 - self.m_q * q_err) - v
+        dvdt = (self.v_nom - self.m_q * q_err) - v
         omega = self.omega_nom - self.m_p * p_err
         return np.array([dvdt, omega, p_filt_dt, q_filt_dt])
 
