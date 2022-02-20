@@ -113,7 +113,7 @@ class Droop(Node):
         q_err = q_filt - self.q_ref
 
         # Droop Control
-        dvdt = (self.v_nom - self.m_q * q_err) - v
+        dvdt = (self.v_nom - self.m_q * q) - v
         omega = self.omega_nom - self.m_p * p_err
         return np.array([dvdt, omega, p_filt_dt, q_filt_dt])
 
