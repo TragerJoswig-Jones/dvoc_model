@@ -5,3 +5,4 @@ from dvoc_model.reference_frames import *
 import dvoc_model.simulate
 import dvoc_model.elements
 from dvoc_model.dvoc import *
+from dvoc_model.droop import *

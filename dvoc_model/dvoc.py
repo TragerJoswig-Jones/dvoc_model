@@ -3,7 +3,7 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import *
-from dvoc_model.simulate import simulate
+from dvoc_model.simulate import simulate, shift_controller_angle_half
 from dvoc_model.elements import Node
 from dvoc_model.calculations import *
 
@@ -13,7 +13,7 @@ class Dvoc(Node):
                  p_ref,
                  q_ref,
                  eps: float = 15.,
-                 xi: float = 1.,
+                 xi: float = 15.,
                  k_v: float = 120.,
                  k_i: float = 0.2,
                  v_nom: float = 120.,
@@ -54,39 +54,18 @@ class Dvoc(Node):
         self.p_ref = p_ref
         self.q_ref = q_ref
         self.dt = dt
+
+        if start_eq:
+            shift_controller_angle_half(self, self.ref, self.omega_nom, self.dt)
+
         if ref is RefFrames.POLAR:
             self.state_names = ["v", "theta"]
-            if start_eq:
-                self.states[1,0] += self.omega_nom / 2 * self.dt
         else:
             self.state_names = ["v,alpha", "v,beta"]
-            if start_eq:
-                v = AlphaBeta.from_polar(self.v_nom, self.omega_nom / 2 * self.dt)
-                self.states[0,0] = v.alpha
-                self.states[1,0] = v.beta
-
-    def collect_states(self, x):
-        if self.ref is RefFrames.ALPHA_BETA:
-            if x is None:
-                v = self.v_alpha_beta()
-                v_alpha = v.alpha
-                v_beta = v.beta
-            else:
-                v_alpha, v_beta = x[0], x[1]
-            return v_alpha, v_beta
-        elif self.ref is RefFrames.POLAR:
-            if x is None:
-                v, theta = self.states[:,0]
-            else:
-                v, theta = x[0], x[1]
-            return v, theta
-        else:
-            NotImplementedError()
-            return None, None
 
 
     def polar_dynamics(self, x=None, t=None, u=None):
-        v, theta = self.collect_states(x)
+        v, theta = self.collect_voltage_states(x)
         v_ab = AlphaBeta.from_polar(v, theta)
         i = self.line.i_alpha_beta()
 
@@ -95,13 +74,13 @@ class Dvoc(Node):
 
         # dVOC Control
         kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
-        v_dt = self.eps / self.k_v ** 2 * v * (2 * self.v_nom ** 2 - 2 * v ** 2) - kvki_3cv * (self.q - self.q_ref)
+        v_dt = self.xi / self.k_v ** 2 * v * (2 * self.v_nom ** 2 - 2 * v ** 2) - kvki_3cv * (self.q - self.q_ref)
         theta_dt = self.omega_nom - kvki_3cv / v * (self.p - self.p_ref)
 
         return np.array([v_dt, theta_dt])
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
-        v_alpha, v_beta = self.collect_states(x)
+        v_alpha, v_beta = self.collect_voltage_states(x)
         v = AlphaBeta(v_alpha, v_beta, 0)
 
         ia_ref, ib_ref = calculate_current(v, self.p_ref, self.q_ref)
@@ -109,7 +88,7 @@ class Dvoc(Node):
         i = self.line.i_alpha_beta()
         i_err = i - i_ref
 
-        tmp = self.eps / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
+        tmp = self.xi / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
         dadt = tmp * v_alpha \
                - self.omega_nom * v_beta \
                - self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
@@ -138,16 +117,20 @@ class Dvoc(Node):
             i_ref = AlphaBeta(ia_ref, ib_ref, 0)
             i_err = i - i_ref
 
-            u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-            u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+            #u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+            #u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
-            temp1 = 1 - 0.5 * self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            #TODO: Trying to aline with CCS code
+            u1 = self.k_i * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
+            u2 = self.k_i * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+
+            temp1 = 1 - 0.5 * self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
             temp2 = 0.5 * self.dt * self.omega_nom
             temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
-            temp4 = 1 + 0.5 * self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp4 = 1 + 0.5 * self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
 
             temp5 = temp4 * v_alpha - temp2 * v_beta - self.dt * u1
-            temp6 = temp2 * v_alpha + temp4 * v_beta - self.dt * u2
+            temp6 = temp2 * v_alpha + temp4 * v_beta - self.dt *u2
 
             va = temp3 * (temp1 * temp5 - temp2 * temp6)
             vb = temp3 * (temp2 * temp5 + temp1 * temp6)
@@ -165,9 +148,11 @@ class Dvoc(Node):
             u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c)
 
             # Implicit Step Calculation
-            temp1 =   self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
-            temp2 = - self.k_i * (self.v_nom**2 - v**2) * self.dt + 1.0
-            temp3 = - u1  * self.dt / v
+            a = -4 * self.xi * self.v_nom**2 + u1 / (self.v_nom**2);
+            b =  4 * self.xi * self.v_nom**3 - 2.0 * u1 / self.v_nom;
+            temp1 = 1.0 + a / 2 * self.dt;
+            temp2 = 1.0 - a / 2 * self.dt;
+            temp3 = b * self.dt;
 
             v_t1 = temp1 / temp2 * v + temp3 / temp2
             theta_t1 = theta + 0.5 * self.dt * (2.0 * self.omega_nom -  u2 / (v_t1**2) - u2 / (v**2))
@@ -197,7 +182,7 @@ class Dvoc(Node):
             u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
             # Implicit Step Calculation
-            temp1 = 1 - self.dt * self.k_i * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp1 = 1 - self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
             temp2 = self.dt * self.omega_nom
             temp3 = 1 / (temp1**2 + temp2**2)
 
@@ -215,9 +200,11 @@ class Dvoc(Node):
             u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c * v)
             u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c * v)
 
-            # Dynamics Calculation
-            temp1 = 1.0 - 2.0 * self.k_i * (self.v_nom**2 - v**2) * self.dt
-            temp2 = - u1  * self.dt / v
+            # Implicit Step Calculations
+            a = -4 * self.xi * self.v_nom**2 + u1 / (self.v_nom**2);
+            b =  4 * self.xi * self.v_nom**3 - 2.0 * u1 / self.v_nom;
+            temp1 = 1.0 - a * self.dt;
+            temp2 = b * self.dt;
 
             v_t1 = 1 / temp1 * v + temp2 / temp1
             theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1**2));

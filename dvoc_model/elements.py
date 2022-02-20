@@ -63,7 +63,7 @@ class Node(Component):
         if self.ref is RefFrames.ALPHA_BETA:
             return AlphaBeta(self.states[0,0], self.states[1,0], 0).to_polar()
         elif self.ref is RefFrames.POLAR:
-            return self.v[0], self.theta[0]
+            return self.states[0,0], self.states[1,0]
         return None
 
     def v_alpha_beta(self):
@@ -87,6 +87,25 @@ class Node(Component):
             return AlphaBeta.from_polar(self.v[0], self.theta[0]).beta
         return None
 
+    def collect_voltage_states(self, x):
+        if self.ref is RefFrames.ALPHA_BETA:
+            if x is None:
+                v = self.v_alpha_beta()
+                v_alpha = v.alpha
+                v_beta = v.beta
+            else:
+                v_alpha, v_beta = x[0], x[1]
+            return v_alpha, v_beta
+        elif self.ref is RefFrames.POLAR:
+            if x is None:
+                v, theta = self.states[:,0]
+            else:
+                v, theta = x[0], x[1]
+            return v, theta
+        else:
+            NotImplementedError()
+            return None, None
+
 
 class Edge(Component):
     def __init__(self, x, ref=RefFrames.ALPHA_BETA):
@@ -94,6 +113,12 @@ class Edge(Component):
 
     def curr_states(self):
         return self.states[:,0]
+
+    def i_alpha_beta(self):
+        if self.ref is RefFrames.ALPHA_BETA:
+            return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+        else:
+            raise NotImplemented
 
 
 class Grid(Node):
@@ -151,12 +176,6 @@ class Line(Edge):
         i_dx_alpha = 1/self.lf*(v1.alpha - v2.alpha - self.rf*i_alpha)
         i_dx_beta = 1/self.lf*(v1.beta - v2.beta - self.rf*i_beta)
         return np.array([i_dx_alpha, i_dx_beta])
-
-    def i_alpha_beta(self):
-        if self.ref is RefFrames.ALPHA_BETA:
-            return AlphaBeta(self.states[0,0], self.states[1,0], 0)
-        else:
-            raise NotImplemented
 
 
 class LineToGrid:

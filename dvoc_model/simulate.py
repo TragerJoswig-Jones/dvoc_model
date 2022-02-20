@@ -3,7 +3,7 @@ import pandas as pd
 from scipy import integrate
 import matplotlib.pyplot as mp
 
-from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
+from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import TWO_PI
 from dvoc_model.elements import Grid, Line, LineToGrid
 from dvoc_model.integration_methods import forward_euler_step
@@ -128,3 +128,16 @@ def simulate(controller, p_refs, q_refs, dt=1 / 10e3, t=500e-3, Lf=1.5e-3, Rf=0.
 
     # mp.show()
     return data
+
+
+def shift_controller_angle_half(controller, ref, omega_nom, dt):
+    """ Shifts the angle of the given controller voltage by half of a step according to the nominal frequency.
+        This shifts the controllers voltage to be closer to the equilibrium if the output is a zero order hold.
+    """
+    if ref is RefFrames.POLAR:
+        controller.states[1,0] += omega_nom / 2 * dt
+    else:
+        vrms = np.sqrt(controller.states[0,0]**2 + controller.states[1,0]**2) / np.sqrt(2)
+        v = AlphaBeta.from_polar(vrms, omega_nom / 2 * dt)
+        controller.states[0,0] = v.alpha
+        controller.states[1,0] = v.beta

@@ -104,19 +104,19 @@ def euler_rk2_step(dt, components, set_states=True, update_states=False):
 
 def rk4_step(dt, components, set_states=True, update_states=False):
     k1s = []
-    for component in zip(components):
+    for component in components:
         dxdt = component.dynamics(component.states[:,0])
         k1s.append(dxdt)
     k2s = []
-    for component, k1, x0 in zip(components, k1s, initial_states):
+    for component, k1 in zip(components, k1s):
         dxdt = component.dynamics(component.states[:,0] + k1 * dt / 2)
         k2s.append(dxdt)
     k3s = []
-    for component, k2, x0 in zip(components, k2s, initial_states):
+    for component, k2 in zip(components, k2s):
         dxdt = component.dynamics(component.states[:,0] + k2 * dt / 2)
         k3s.append(dxdt)
     k4s = []
-    for component, k3, x0 in zip(components, k3s, initial_states):
+    for component, k3 in zip(components, k3s):
         dxdt = component.dynamics(component.states[:,0] + k3 * dt)
         k4s.append(dxdt)
 
