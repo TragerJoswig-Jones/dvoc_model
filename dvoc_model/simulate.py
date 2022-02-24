@@ -54,6 +54,11 @@ def ode_solver_system(dt, system, params={}, set_states=True, update_states=Fals
     return dxs, t, y
 
 
+def continuous_step(dt, components):
+    """ Empty function for continuous controller """
+    return None
+
+
 def simulate(controller, p_refs, q_refs, dt=1 / 10e3, t=500e-3, Lf=1.5e-3, Rf=0.8,
              grid_omega=TWO_PI * 60, v_nom=120., id0=0, iq0=0, discretization_step=ode_solver_step):
     ts = np.arange(0, t, dt)

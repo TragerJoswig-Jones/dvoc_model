@@ -55,6 +55,10 @@ class Dvoc(Node):
         self.q_ref = q_ref
         self.dt = dt
 
+        # TODO: Add dependant components array
+        self.dependent_cmpnts = [self.line]
+        self.n_states = self.states.shape[0]
+
         if start_eq:
             shift_controller_angle_half(self, self.ref, self.omega_nom, self.dt)
 
