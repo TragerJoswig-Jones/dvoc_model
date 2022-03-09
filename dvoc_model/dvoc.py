@@ -24,6 +24,8 @@ class Dvoc(Node):
                  ref: RefFrames = RefFrames.POLAR,
                  start_eq: bool = True,
                  dt: float = 1.0 / 10e3,
+                 p_refs = None,
+                 q_refs = None,
                  ):
         self.v_nom = v_nom  # RMS amplitude, v_nom
         self.hz_nom = hz_nom
@@ -53,6 +55,8 @@ class Dvoc(Node):
         self.line = None
         self.p_ref = p_ref
         self.q_ref = q_ref
+        self.p_refs = p_refs
+        self.q_refs = q_refs
         self.dt = dt
 
         # TODO: Add dependant components array
@@ -110,7 +114,7 @@ class Dvoc(Node):
         In the Polar reference frame voltage magnitude, powers, and voltage magnitudes in the power error term are
         assumed constant from x[t] -> x[t+1].
         """
-        x1, x2 = self.collect_states(x)
+        x1, x2 = self.collect_voltage_states(x)
         i = self.line.i_alpha_beta()
 
         if self.ref == RefFrames.ALPHA_BETA:
@@ -124,7 +128,7 @@ class Dvoc(Node):
             #u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
             #u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
-            #TODO: Trying to aline with CCS code
+            #TODO: Trying to align with CCS code
             u1 = self.k_i * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
             u2 = self.k_i * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
@@ -170,7 +174,7 @@ class Dvoc(Node):
         Polar reference frame: voltage magnitude, powers, and voltage magnitudes in the power error term are
         assumed constant.
         """
-        x1, x2 = self.collect_states(x)
+        x1, x2 = self.collect_voltage_states(x)
         i = self.line.i_alpha_beta()
 
         if self.ref == RefFrames.ALPHA_BETA:

@@ -146,3 +146,5 @@ def shift_controller_angle_half(controller, ref, omega_nom, dt):
         v = AlphaBeta.from_polar(vrms, omega_nom / 2 * dt)
         controller.states[0,0] = v.alpha
         controller.states[1,0] = v.beta
+
+

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
-from numpy import sin, cos, arctan2, pi, sqrt
 from dvoc_model.constants import *
+from numpy import sin, cos, arctan2, pi, sqrt
 
 class RefFrames(Enum):
     ALPHA_BETA = 1
@@ -53,7 +53,7 @@ class AlphaBeta:
     def to_polar(self):
         v = sqrt(self.alpha**2 + self.beta**2) / sqrt(2)
         theta = arctan2(self.beta, self.alpha)
-        return v, theta
+        return Polar(v, theta)
 
     def to_abc(self):
         a = self.alpha + self.gamma
@@ -78,6 +78,15 @@ class AlphaBeta:
             alpha = self.alpha * other
             beta = self.beta * other
             gamma = self.gamma * other
+            return AlphaBeta(alpha, beta, gamma)
+        elif isinstance(other, AlphaBeta):
+            throw(NotImplemented)
+
+    def __truediv__(self, other):
+        if isinstance(other, (int, float, complex)):
+            alpha = self.alpha / other
+            beta = self.beta / other
+            gamma = self.gamma / other
             return AlphaBeta(alpha, beta, gamma)
         elif isinstance(other, AlphaBeta):
             throw(NotImplemented)
@@ -141,6 +150,24 @@ class Abc:
         z = ONE_THIRD * (self.a + self.b + self.c)
 
         return Dq0(d, q, z)
+
+
+@dataclass
+class Polar:
+    r: float
+    theta: float
+
+    @classmethod
+    def from_alpha_beta(cls, alpha: float, beta: float):
+        r = sqrt(alpha**2 + beta**2) / sqrt(2)
+        theta = arctan2(beta, alpha)
+        return Polar(r, theta)
+
+    def to_alpha_beta(self) -> AlphaBeta:
+        return AlphaBeta.from_polar(mag, theta)
+
+    def deg(self):
+        return self.theta * 180 / pi
 
 
 def convert_state_ref(x, fr_ref, to_ref):

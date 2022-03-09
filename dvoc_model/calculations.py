@@ -13,10 +13,23 @@ def calculate_current(v, p, q):
     return i_alpha, i_beta
 
 
-def angle_diff(theta1, theta2):
-    delta = abs(theta1 - theta2)
-    if delta > np.pi:
-        delta = 2 * np.pi - delta
+def angle_diff(theta1, theta2, deg=False):
+    delta = theta1 - theta2
+    if deg:
+        try:
+            delta = [-360. + d if d > 180. else d for d in delta]
+            delta = [360. + d if d < -180. else d for d in delta]
+        except TypeError:
+            if delta > 180:
+                delta = -360. + delta
+            if delta < -180:
+                delta = 360. + delta
+    else:
+        try:
+            delta = [2*np.pi - d if d > np.pi else d for d in delta]
+        except TypeError:
+            if delta > np.pi:
+                delta = 2 * np.pi - delta
     return delta
 
 
