@@ -75,7 +75,7 @@ class Dvoc(Node):
     def polar_dynamics(self, x=None, t=None, u=None):
         v, theta = self.collect_voltage_states(x)
         v_ab = AlphaBeta.from_polar(v, theta)
-        i = self.line.i_alpha_beta()
+        i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
 
         # Power Calculation
         self.p, self.q = calculate_power(v_ab, i)
@@ -89,11 +89,11 @@ class Dvoc(Node):
 
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
         v_alpha, v_beta = self.collect_voltage_states(x)
+        i = self.line.i_alpha_beta() if u is None else AlphaBeta(u[0][0], u[0][1], 0)
         v = AlphaBeta(v_alpha, v_beta, 0)
 
         ia_ref, ib_ref = calculate_current(v, self.p_ref, self.q_ref)
         i_ref = AlphaBeta(ia_ref, ib_ref, 0)
-        i = self.line.i_alpha_beta()
         i_err = i - i_ref
 
         tmp = self.xi / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
@@ -115,7 +115,7 @@ class Dvoc(Node):
         assumed constant from x[t] -> x[t+1].
         """
         x1, x2 = self.collect_voltage_states(x)
-        i = self.line.i_alpha_beta()
+        i = self.line.i_alpha_beta() if u is None else AlphaBeta(u[0][0], u[0][1], 0)
 
         if self.ref == RefFrames.ALPHA_BETA:
             v_alpha, v_beta = x1, x2
@@ -175,7 +175,7 @@ class Dvoc(Node):
         assumed constant.
         """
         x1, x2 = self.collect_voltage_states(x)
-        i = self.line.i_alpha_beta()
+        i = self.line.i_alpha_beta() if u is None else AlphaBeta(u[0][0], u[0][1], 0)
 
         if self.ref == RefFrames.ALPHA_BETA:
             v_alpha, v_beta = x1, x2

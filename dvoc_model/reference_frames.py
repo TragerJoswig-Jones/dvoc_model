@@ -164,7 +164,7 @@ class Polar:
         return Polar(r, theta)
 
     def to_alpha_beta(self) -> AlphaBeta:
-        return AlphaBeta.from_polar(mag, theta)
+        return AlphaBeta.from_polar(self.r, self.theta)
 
     def deg(self):
         return self.theta * 180 / pi

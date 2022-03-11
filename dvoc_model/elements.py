@@ -61,7 +61,8 @@ class Node(Component):
 
     def v_polar(self):
         if self.ref is RefFrames.ALPHA_BETA:
-            return AlphaBeta(self.states[0,0], self.states[1,0], 0).to_polar()
+            v_polar = AlphaBeta(self.states[0,0], self.states[1,0], 0).to_polar()
+            return v_polar.r, v_polar.theta
         elif self.ref is RefFrames.POLAR:
             return self.states[0,0], self.states[1,0]
         return None
