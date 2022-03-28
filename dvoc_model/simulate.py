@@ -36,7 +36,7 @@ def ode_solver_system(dt, system, params={}, set_states=True, update_states=Fals
     rtol = params['rtol'] if 'rtol' in params else 1e-10
     atol = params['atol'] if 'atol' in params else 1e-10
     # TODO: extract all info from odeint and return it
-    result = integrate.solve_ivp(system.dynamics, [0, dt], system.states[:,0].tolist(), method='RK45',
+    result = integrate.solve_ivp(system.dynamics, [0, dt], system.states[:,0].tolist(), method='DOP853',  # TODO: Select method,  ‘DOP853’ or 'RK45'
                                             rtol=rtol, atol=atol, vectorized=True)
 
     t = result.t
@@ -148,3 +148,12 @@ def shift_controller_angle_half(controller, ref, omega_nom, dt):
         controller.states[1,0] = v.beta
 
 
+def shift_angle(v, shift):
+    alpha_beta = False
+    if isinstance(v, AlphaBeta):
+        alpha_beta = True
+        v = v.to_polar()
+    v.theta += shift
+    if alpha_beta:
+        v = v.to_alpha_beta()
+    return v

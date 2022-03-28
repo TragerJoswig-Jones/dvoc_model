@@ -226,7 +226,7 @@ class LCL_Filter(Edge):
                  to: Node,
                  rf1: float,
                  lf1: float,
-                 c: float,
+                 c: float = 4.7e-6,  # 4.7uF
                  rf2: float = None,
                  lf2: float = None,
                  v_nom: float = 120.,

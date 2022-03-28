@@ -78,7 +78,8 @@ class Dvoc(Node):
         i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
 
         # Power Calculation
-        self.p, self.q = calculate_power(v_ab, i)
+        self.p, self.q = calculate_power(v_ab, i)  # TODO: Should this be phase shifted to compensate for ZOH?
+        # TODO: Phase-shift in current due to ADC sampling ZOH makes this moot?
 
         # dVOC Control
         kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
