@@ -1,5 +1,4 @@
 import scipy.optimize
-import nbkode
 import numpy as np
 
 """ Explicit Solvers """
