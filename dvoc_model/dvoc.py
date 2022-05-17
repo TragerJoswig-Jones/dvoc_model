@@ -3,7 +3,7 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import *
-from dvoc_model.simulate import simulate, shift_controller_angle_half
+from dvoc_model.simulate import simulate, shift_controller_angle_half, shift_angle
 from dvoc_model.elements import Node
 from dvoc_model.calculations import *
 
@@ -17,6 +17,7 @@ class Dvoc(Node):
                  k_v: float = 120.,
                  k_i: float = 0.2,
                  v_nom: float = 120.,
+                 s_rated: float = 1000.,
                  hz_nom: float = 60,
                  varphi: float = pi / 2,
                  l: float = 26.268e-6,
@@ -24,14 +25,15 @@ class Dvoc(Node):
                  ref: RefFrames = RefFrames.POLAR,
                  start_eq: bool = True,
                  dt: float = 1.0 / 10e3,
-                 p_refs = None,
-                 q_refs = None,
+                 p_refs=None,
+                 q_refs=None,
                  ):
         self.v_nom = v_nom  # RMS amplitude, v_nom
         self.hz_nom = hz_nom
-        l = (1 / (hz_nom * 2 * np.pi))**2 / c  # Adjust l to make omega_nom exactly 60 Hz
+        l = (1 / (hz_nom * 2 * np.pi)) ** 2 / c  # Adjust l to make omega_nom exactly 60 Hz
         self.omega_nom = 1 / sqrt(l * c)
         self.c = c
+        self.x_nom = 1.0
 
         # initialize state variables, V (Peak Voltage), Theta (Radians)
         if ref is RefFrames.POLAR:
@@ -43,8 +45,8 @@ class Dvoc(Node):
         # set dvoc controller parameters
         self.eps = eps
         self.xi = xi
-        self.k_i = k_i
-        self.k_v = k_v
+        self.k_i = 3 * v_nom / s_rated  # TODO: Max power in experiment
+        self.k_v = v_nom
         self.sin_phi = sin(varphi)
         self.cos_phi = cos(varphi)
 
@@ -71,14 +73,16 @@ class Dvoc(Node):
         else:
             self.state_names = ["v,alpha", "v,beta"]
 
-
     def polar_dynamics(self, x=None, t=None, u=None):
         v, theta = self.collect_voltage_states(x)
         v_ab = AlphaBeta.from_polar(v, theta)
-        i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
+        i = self.line.i_alpha_beta() if u is None else u[
+            0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
 
         # Power Calculation
-        self.p, self.q = calculate_power(v_ab, i)  # TODO: Should this be phase shifted to compensate for ZOH?
+        # self.p, self.q = calculate_power(shift_angle(v_ab, self.omega_nom*self.dt/2), i)
+        self.p, self.q = calculate_power(v_ab, i)
+        # TODO: Should this be phase shifted to compensate for ZOH?
         # TODO: Phase-shift in current due to ADC sampling ZOH makes this moot?
 
         # dVOC Control
@@ -97,7 +101,8 @@ class Dvoc(Node):
         i_ref = AlphaBeta(ia_ref, ib_ref, 0)
         i_err = i - i_ref
 
-        tmp = self.xi / (self.k_v ** 2) * (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  #TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
+        tmp = self.xi / (self.k_v ** 2) * (
+                    2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  # TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
         dadt = tmp * v_alpha \
                - self.omega_nom * v_beta \
                - self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
@@ -126,23 +131,22 @@ class Dvoc(Node):
             i_ref = AlphaBeta(ia_ref, ib_ref, 0)
             i_err = i - i_ref
 
-            #u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-            #u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+            u1 = self.k_i * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta) / self.c
+            u2 = self.k_i * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta) / self.c
 
-            #TODO: Trying to align with CCS code
-            u1 = self.k_i * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-            u2 = self.k_i * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+            v_alpha = v_alpha / self.k_v
+            v_beta = v_beta / self.k_v
 
-            temp1 = 1 - 0.5 * self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp1 = 1 - 0.5 * self.dt * self.xi * (2 * self.x_nom ** 2 - (v_alpha ** 2 + v_beta ** 2))
             temp2 = 0.5 * self.dt * self.omega_nom
             temp3 = 1 / (temp1 * temp1 + temp2 * temp2)
-            temp4 = 1 + 0.5 * self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp4 = 1 + 0.5 * self.dt * self.xi * (2 * self.x_nom ** 2 - (v_alpha ** 2 + v_beta ** 2))
 
             temp5 = temp4 * v_alpha - temp2 * v_beta - self.dt * u1
-            temp6 = temp2 * v_alpha + temp4 * v_beta - self.dt *u2
+            temp6 = temp2 * v_alpha + temp4 * v_beta - self.dt * u2
 
-            va = temp3 * (temp1 * temp5 - temp2 * temp6)
-            vb = temp3 * (temp2 * temp5 + temp1 * temp6)
+            va = temp3 * (temp1 * temp5 - temp2 * temp6) * self.k_v
+            vb = temp3 * (temp2 * temp5 + temp1 * temp6) * self.k_v
 
             return np.array([va, vb])
         elif self.ref == RefFrames.POLAR:
@@ -153,18 +157,18 @@ class Dvoc(Node):
             self.p, self.q = calculate_power(v_ab, i)
 
             # Power Errors
-            u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c)
-            u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c)
+            u2 = (self.p - self.p_ref) * self.k_i * self.k_v / (3 * self.c)
+            u1 = (self.q - self.q_ref) * self.k_i * self.k_v / (3 * self.c)
 
             # Implicit Step Calculation
-            a = -4 * self.xi * self.v_nom**2 + u1 / (self.v_nom**2);
-            b =  4 * self.xi * self.v_nom**3 - 2.0 * u1 / self.v_nom;
-            temp1 = 1.0 + a / 2 * self.dt;
-            temp2 = 1.0 - a / 2 * self.dt;
-            temp3 = b * self.dt;
+            a = -4 * self.xi * self.v_nom ** 2 + u1 / (self.v_nom ** 2)
+            b = 4 * self.xi * self.v_nom ** 3 - 2.0 * u1 / self.v_nom
+            temp1 = 1.0 + a / 2 * self.dt
+            temp2 = 1.0 - a / 2 * self.dt
+            temp3 = b * self.dt
 
             v_t1 = temp1 / temp2 * v + temp3 / temp2
-            theta_t1 = theta + 0.5 * self.dt * (2.0 * self.omega_nom -  u2 / (v_t1**2) - u2 / (v**2))
+            theta_t1 = theta + 0.5 * self.dt * (2.0 * self.omega_nom - u2 / (v_t1 ** 2) - u2 / (v ** 2))
             return np.array([v_t1, theta_t1])
 
     def backward_step(self, x=None, t=None, u=None):
@@ -187,16 +191,19 @@ class Dvoc(Node):
             i_err = i - i_ref
 
             # Current Error Terms
-            u1 = self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
-            u2 = self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
+            u1 = self.k_i * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta) / self.c
+            u2 = self.k_i * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta) / self.c
+
+            v_alpha = v_alpha / self.k_v
+            v_beta = v_beta / self.k_v
 
             # Implicit Step Calculation
-            temp1 = 1 - self.dt * self.xi * (2*self.v_nom**2 - (v_alpha**2 + v_beta**2))
+            temp1 = 1 - self.dt * self.xi * (2 * self.x_nom ** 2 - (v_alpha ** 2 + v_beta ** 2))
             temp2 = self.dt * self.omega_nom
-            temp3 = 1 / (temp1**2 + temp2**2)
+            temp3 = 1 / (temp1 ** 2 + temp2 ** 2)
 
-            va = temp3 * (temp1 * (v_alpha - self.dt * u1) - temp2 * (v_beta - self.dt * u2))
-            vb = temp3 * (temp1 * (v_beta - self.dt * u2) + temp2 * (v_alpha - self.dt * u1))
+            va = temp3 * (temp1 * (v_alpha - self.dt * u1) - temp2 * (v_beta - self.dt * u2)) * self.k_v
+            vb = temp3 * (temp1 * (v_beta - self.dt * u2) + temp2 * (v_alpha - self.dt * u1)) * self.k_v
 
             return np.array([va, vb])
         elif self.ref == RefFrames.POLAR:
@@ -206,17 +213,18 @@ class Dvoc(Node):
             # Power Calculation
             self.p, self.q = calculate_power(v_ab, i)
 
-            u1 = (self.p - self.p_ref) * self.k_i / (3 * self.k_v * self.c * v)
-            u2 = (self.q - self.q_ref) * self.k_i / (3 * self.k_v * self.c * v)
+            u2 = (self.p - self.p_ref) * self.k_i * self.k_v / (3 * self.c)
+            u1 = (self.q - self.q_ref) * self.k_i * self.k_v / (3 * self.c)
 
             # Implicit Step Calculations
-            a = -4 * self.xi * self.v_nom**2 + u1 / (self.v_nom**2);
-            b =  4 * self.xi * self.v_nom**3 - 2.0 * u1 / self.v_nom;
-            temp1 = 1.0 - a * self.dt;
-            temp2 = b * self.dt;
+            a = -4 * self.xi * self.v_nom ** 2 + u1 / (self.v_nom ** 2)
+            b = 4 * self.xi * self.v_nom ** 3 - 2.0 * u1 / self.v_nom
+            temp1 = 1.0 - a * self.dt
+            temp2 = b * self.dt
 
             v_t1 = 1 / temp1 * v + temp2 / temp1
-            theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1**2));
+            theta_t1 = theta + self.dt * (self.omega_nom - u2 / (v_t1 ** 2))
+
             return np.array([v_t1, theta_t1])
 
 

@@ -105,7 +105,7 @@ def euler_rk2_step(dt, components, set_states=True, update_states=False):
 def rk4_step(dt, components, set_states=True, update_states=False):
     k1s = []
     for component in components:
-        dxdt = component.dynamics(component.states[:,0])
+        dxdt = component.dynamics(component.states[:, 0])
         k1s.append(dxdt)
     k2s = []
     for component, k1 in zip(components, k1s):
@@ -138,11 +138,11 @@ def rk4_step(dt, components, set_states=True, update_states=False):
 def tustin_step(dt, components, set_states=True, update_states=False):
     dxs = []
     for component in components:
-        x0 = component.states[:,0]
+        x0 = component.states[:, 0]
         x1 = component.tustin_step(x=x0)
 
         if set_states:
-            component.states[:,1] = x1  # step states
+            component.states[:, 1] = x1  # step states
         dxs.append(x1 - x0)
     if update_states:
         for component in components:
@@ -153,16 +153,17 @@ def tustin_step(dt, components, set_states=True, update_states=False):
 def backward_step(dt, components, set_states=True, update_states=False):
     dxs = []
     for component in components:
-        x0 = component.states[:,0]
+        x0 = component.states[:, 0]
         x1 = component.backward_step(x=x0)
 
         if set_states:
-            component.states[:,1] = x1  # step states
+            component.states[:, 1] = x1  # step states
         dxs.append(x1 - x0)
     if update_states:
         for component in components:
             component.step_states()
     return dxs
+
 
 """
 # NUMBAKIT ODE SOLVERS
