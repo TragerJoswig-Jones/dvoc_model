@@ -283,7 +283,7 @@ class LCL_Filter(Edge):
         return np.array([i1_dx_alpha, i1_dx_beta, v_dx_alpha, v_dx_beta, i2_dx_alpha, i2_dx_beta])
 
     def i_alpha_beta(self):
-        return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+        return AlphaBeta(self.states[0,0], self.states[1,0], 0)  # TODO: Make this grid side current?
 
 
 class Load(Node):

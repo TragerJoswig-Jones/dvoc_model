@@ -148,12 +148,11 @@ def shift_controller_angle_half(controller, ref, omega_nom, dt):
         controller.states[1,0] = v.beta
 
 
-def shift_angle(v, shift):
-    alpha_beta = False
+def shift_angle(v, shift, alpha_beta=False):
     if isinstance(v, AlphaBeta):
         alpha_beta = True
         v = v.to_polar()
-    v.theta += shift
+    v.theta += shift  # Shifts to left / forwards in time when adding positive angle
     if alpha_beta:
         v = v.to_alpha_beta()
     return v

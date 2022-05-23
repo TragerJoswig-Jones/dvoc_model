@@ -32,7 +32,7 @@ def backward_euler_step(dt, components, set_states=True, update_states=False):
             component.step_states()
     return dxs
 
-# TODO: Update below here
+
 def semi_implicit_euler_step(dt, components, set_states=True, update_states=False):
     k1s = forward_euler_step(dt, components, set_states=set_states, update_states=False)  # Estimation Step
     for k1 in k1s: k1[1] = 0  # Zero out step for v_beta / theta
@@ -66,34 +66,19 @@ def rk2_step(dt, components, set_states=True, update_states=False):
     return dxs
 
 
-def rk2_shift_step(dt, components, set_states=True, update_states=False):
-    k1s = forward_euler_step(dt, components, set_states=set_states, update_states=False)  # Estimation Step
-
+def taylor2_step(dt, components, set_states=True, update_states=False):
+    """ Only to be used with dVOC controller """
     dxs = []
-    for component, k1 in zip(components, k1s):
-        k2dt = component.dynamics(component.states[:,0] + k1)
-        dx = (k1 + k2dt * dt) * 0.5  # k1 already took dt into account
-        dx[0] += 0.008 * dt  # TEST: Apply LTE diff error here
-        dx[1] -= 5e-5 * dt
+    for component in components:
+        k1dt = component.dynamics(x=component.states[:,0])
+        k1ddt = component.ddot(x=component.states[:,0], xdot=k1dt)
+        # v_norm = component.states[0,0]**2 + component.states[1,0]**2
+        v, theta = component.v_polar()
+        v_norm = 2 * v**2 if component.ref.value == 1 else v**2
+        k = component.xi / component.k_v**2
+        dx = (k1dt + k1ddt * dt * 0.5) * dt  # TODO: 1.9994: (120.0001) in iso, 1.985 match cont in cont_sim
         if set_states:
             component.states[:,1] = component.states[:,0] + dx
-        dxs.append(dx)
-    if update_states:
-        for component in components:
-            component.step_states()
-    return dxs
-
-
-def euler_rk2_step(dt, components, set_states=True, update_states=False):
-    k1s = forward_euler_step(dt, components, set_states=set_states, update_states=False)  # Estimation Step
-
-    dxs = []
-    for component, k1 in zip(components, k1s):
-        k2dt = component.dynamics(component.states[:,0] + k1)
-        k2dt[0] = k1[0]  # First state uses forward euler
-        dx = (k1 + k2dt * dt) * 0.5  # k1 already took dt into account
-        if set_states:
-            component.states = component.states[:,0] + dx
         dxs.append(dx)
     if update_states:
         for component in components:

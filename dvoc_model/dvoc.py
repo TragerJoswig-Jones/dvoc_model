@@ -80,7 +80,7 @@ class Dvoc(Node):
             0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
 
         # Power Calculation
-        # self.p, self.q = calculate_power(shift_angle(v_ab, self.omega_nom*self.dt/2), i)
+        #self.p, self.q = calculate_power(shift_angle(v_ab, -self.omega_nom*self.dt/2), i)
         self.p, self.q = calculate_power(v_ab, i)
         # TODO: Should this be phase shifted to compensate for ZOH?
         # TODO: Phase-shift in current due to ADC sampling ZOH makes this moot?
@@ -102,7 +102,7 @@ class Dvoc(Node):
         i_err = i - i_ref
 
         tmp = self.xi / (self.k_v ** 2) * (
-                    2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)  # TEST: (2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
+                    2 * self.v_nom ** 2 - v_alpha ** 2 - v_beta ** 2)
         dadt = tmp * v_alpha \
                - self.omega_nom * v_beta \
                - self.k_v * self.k_i / self.c * (self.cos_phi * i_err.alpha - self.sin_phi * i_err.beta)
@@ -112,6 +112,21 @@ class Dvoc(Node):
                - self.k_v * self.k_i / self.c * (self.sin_phi * i_err.alpha + self.cos_phi * i_err.beta)
 
         return np.array([dadt, dbdt])
+
+    def ddot(self, x=None, t=None, u=None, xdot=None):
+        va, vb = self.collect_voltage_states(x)
+        vad, vbd = self.collect_voltage_states(xdot)
+
+        va = va + vad * self.dt  # TODO: Semi-implicit has any benefits?
+        vb = vb + vbd * self.dt  # Yes it improves power tracking for both P & Q
+
+        temp1 = 2 * self.v_nom**2 - va**2 - vb**2
+        temp2 = -2 * va * vad - 2 * vb * vbd
+        k = self.xi / self.k_v**2
+        vadd = -self.omega_nom * vbd + k * (va * temp2 + vad * temp1)
+        vbdd = self.omega_nom * vad + k * (vb * temp2 + vbd * temp1)
+
+        return np.array([vadd, vbdd])
 
     def tustin_step(self, x=None, t=None, u=None):
         """ Approximate Tustin / bilinear discretized dynamics of the dVOC controller.
