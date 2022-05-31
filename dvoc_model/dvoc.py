@@ -3,7 +3,8 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import *
-from dvoc_model.simulate import simulate, shift_controller_angle_half, shift_angle
+from dvoc_model.simulate import simulate, shift_controller_angle_half
+from dvoc_model import shift_angle
 from dvoc_model.elements import Node
 from dvoc_model.calculations import *
 
@@ -27,6 +28,7 @@ class Dvoc(Node):
                  dt: float = 1.0 / 10e3,
                  p_refs=None,
                  q_refs=None,
+                 output_hold_periods: int = 1,
                  ):
         self.v_nom = v_nom  # RMS amplitude, v_nom
         self.hz_nom = hz_nom
@@ -41,6 +43,9 @@ class Dvoc(Node):
         else:
             v = AlphaBeta.from_polar(self.v_nom, 0)
             super().__init__((v.alpha, v.beta), ref)
+        if output_hold_periods > 1:
+            self.output_hold_periods = output_hold_periods
+            self.output = self.collect_states()
 
         # set dvoc controller parameters
         self.eps = eps
@@ -76,12 +81,35 @@ class Dvoc(Node):
     def polar_dynamics(self, x=None, t=None, u=None):
         v, theta = self.collect_voltage_states(x)
         v_ab = AlphaBeta.from_polar(v, theta)
-        i = self.line.i_alpha_beta() if u is None else u[
-            0].to_alpha_beta()  # TODO: Find a better way to get AlphaBeta current for system dynamics
+        i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()
+        # TODO: Determine if this helps multi-step methods. It does not... first method helps FE that's it
+        """
+        if u is None:  # Only when not using a system solver
+            # Trying to find average power over interrupt period
+            #idq = i.to_dq0(SinCos.from_theta(self.v_polar()[1]))  # Convert to DQ using starting voltage angle
+            #theta_ = self.v_polar()[1]
+            #theta_dt = theta_ + self.omega_nom * self.dt
+            #p1 = sin(theta_dt) * (v_ab.alpha * idq.d + v_ab.beta * idq.q) + cos(theta_dt) * (v_ab.alpha * idq.q - v_ab.beta * idq.d)
+            #p2 = sin(theta_) * (v_ab.alpha * idq.d + v_ab.beta * idq.q) + cos(theta_) * (v_ab.alpha * idq.q - v_ab.beta * idq.d)
+            #p = 1.5 / self.dt * (p2 - p1) / self.omega_nom
+            #q1 = sin(theta_dt) * (v_ab.beta * idq.d - v_ab.alpha * idq.q) + cos(theta_dt) * (v_ab.alpha * idq.d + v_ab.beta * idq.q)
+            #q2 = sin(theta_) * (v_ab.beta * idq.d - v_ab.alpha * idq.q) + cos(theta_) * (v_ab.alpha * idq.d + v_ab.beta * idq.q)
+            #q = 1.5 / self.dt * (q2 - q1) / self.omega_nom
+            #self.p, self.q = p, q
+
+            # Trying to shift curent with voltage angle
+            # idq = i.to_dq0(SinCos.from_theta(self.v_polar()[1]))  # Convert to DQ using starting voltage angle
+            #i = idq.to_alpha_beta(SinCos.from_theta(theta))  # Convert back to ab using predicted voltage angle
+
+            # Try shifting current halfway such that P = Pref at the middle of the interrupt period
+            idq = i.to_dq0(SinCos.from_theta(0))  # Convert to DQ using starting voltage angle
+            i = idq.to_alpha_beta(SinCos.from_theta(-self.omega_nom * self.dt / 2))  # Convert back to ab using predicted voltage angle
+        """
 
         # Power Calculation
         #self.p, self.q = calculate_power(shift_angle(v_ab, -self.omega_nom*self.dt/2), i)
         self.p, self.q = calculate_power(v_ab, i)
+
         # TODO: Should this be phase shifted to compensate for ZOH?
         # TODO: Phase-shift in current due to ADC sampling ZOH makes this moot?
 

@@ -1,26 +1,26 @@
 import numpy as np
 import pandas as pd
 from scipy import integrate
-import matplotlib.pyplot as mp
 
-from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
+from dvoc_model.reference_frames import AlphaBeta, RefFrames
 from dvoc_model.constants import TWO_PI
 from dvoc_model.elements import Grid, Line, LineToGrid
-from dvoc_model.integration_methods import forward_euler_step
-from dvoc_model.calculations import calculate_power
+from dvoc_model.calculations import calculate_power, shift_angle
 
 
 """ ODE Solvers """
 
 
 # Takes a component and updates its states based on its dynamics and sampled zero-order hold values of values that
-# impact these dynamics
+# impact these dynamics. Does not continuously sample the current.
 def ode_solver_step(dt, components, params={}, set_states=True, update_states=False):
     dxs = []
     rtol = params['rtol'] if 'rtol' in params else 1e-10
     atol = params['atol'] if 'atol' in params else 1e-10
+    max_step = params['hmax'] if 'hmax' in params else np.inf
     for component in components:
-        x0, x1 = integrate.odeint(component.dynamics, component.states[:,0].tolist(), [0, dt], rtol=rtol, atol=atol)
+        x0, x1 = integrate.odeint(component.dynamics, component.states[:,0].tolist(), [0, dt],
+                                  rtol=rtol, atol=atol, hmax=max_step)
         # TODO extract all info from odeint and return it
         if set_states:
             component.states[:,1] = x1  # step states
@@ -35,9 +35,10 @@ def ode_solver_system(dt, system, params={}, set_states=True, update_states=Fals
     dxs = []
     rtol = params['rtol'] if 'rtol' in params else 1e-10
     atol = params['atol'] if 'atol' in params else 1e-10
+    max_step = params['hmax'] if 'hmax' in params else np.inf
     # TODO: extract all info from odeint and return it
     result = integrate.solve_ivp(system.dynamics, [0, dt], system.states[:,0].tolist(), method='DOP853',  # TODO: Select method,  ‘DOP853’ or 'RK45'
-                                            rtol=rtol, atol=atol, vectorized=True)
+                                 rtol=rtol, atol=atol, max_step=max_step, vectorized=True)
 
     t = result.t
     y = result.y
@@ -140,7 +141,7 @@ def shift_controller_angle_half(controller, ref, omega_nom, dt):
         This shifts the controllers voltage to be closer to the equilibrium if the output is a zero order hold.
     """
     if ref is RefFrames.POLAR:
-        controller.states[1,0] += omega_nom / 2 * dt
+        controller.states[1,0] += omega_nom / 2 * dt  # (+) Shifts the controller voltage waveform left / backward
     else:
         vrms = np.sqrt(controller.states[0,0]**2 + controller.states[1,0]**2) / np.sqrt(2)
         v = AlphaBeta.from_polar(vrms, omega_nom / 2 * dt)
@@ -148,11 +149,39 @@ def shift_controller_angle_half(controller, ref, omega_nom, dt):
         controller.states[1,0] = v.beta
 
 
-def shift_angle(v, shift, alpha_beta=False):
-    if isinstance(v, AlphaBeta):
-        alpha_beta = True
-        v = v.to_polar()
-    v.theta += shift  # Shifts to left / forwards in time when adding positive angle
-    if alpha_beta:
-        v = v.to_alpha_beta()
-    return v
+def collect_sim_info(data_dict, controller, grid, line, method,
+                     ode_dict=None, t_ode=None, y_ode=None, continuous=False):
+    ref_frame = controller.ref
+
+    # update the data
+    v, theta = controller.v_polar(internal=False)
+    vg = grid.v_alpha_beta(internal=False)
+    vab = controller.v_alpha_beta(internal=False)
+    iab = line.i_alpha_beta(internal=False)
+    v_abc = vab.to_abc()
+    i_abc = iab.to_abc()
+    p, q = calculate_power(vab, iab)
+    if not continuous:
+        # p, q = calculate_power(shift_angle(vab, -controller.omega_nom * controller.dt / 2), iab)
+        # theta = theta - controller.omega_nom * controller.dt / 2  # Shift to theta at center of stepped waveform steps
+        pass
+    data_dict['v_alpha, %s, %s' % (method, ref_frame.name)].append(vab.alpha)
+    data_dict['v_beta, %s, %s' % (method, ref_frame.name)].append(vab.beta)
+    data_dict['v, %s, %s' % (method, ref_frame.name)].append(v)
+    data_dict['theta, %s, %s' % (method, ref_frame.name)].append(theta)
+    data_dict['vg_alpha, %s, %s' % (method, ref_frame.name)].append(vg.alpha)
+    data_dict['vg_beta, %s, %s' % (method, ref_frame.name)].append(vg.beta)
+    data_dict['v_a, %s, %s' % (method, ref_frame.name)].append(v_abc.a)
+    data_dict['v_b, %s, %s' % (method, ref_frame.name)].append(v_abc.b)
+    data_dict['v_c, %s, %s' % (method, ref_frame.name)].append(v_abc.c)
+    data_dict['i_alpha, %s, %s' % (method, ref_frame.name)].append(iab.alpha)
+    data_dict['i_beta, %s, %s' % (method, ref_frame.name)].append(iab.beta)
+    data_dict['i_a, %s, %s' % (method, ref_frame.name)].append(i_abc.a)
+    data_dict['i_b, %s, %s' % (method, ref_frame.name)].append(i_abc.b)
+    data_dict['i_c, %s, %s' % (method, ref_frame.name)].append(i_abc.c)
+    data_dict['p, %s, %s' % (method, ref_frame.name)].append(p)
+    data_dict['q, %s, %s' % (method, ref_frame.name)].append(q)
+
+    if ode_dict is not None:
+        ode_dict['T_ode, %s, %s' % (method, ref_frame.name)] = t_ode
+        ode_dict['Y_ode, %s, %s' % (method, ref_frame.name)] = y_ode

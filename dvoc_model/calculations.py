@@ -1,4 +1,5 @@
 import numpy as np
+from dvoc_model.reference_frames import AlphaBeta
 
 
 def calculate_power(v, i):
@@ -53,6 +54,16 @@ def power_flow_2_bus(v1, theta1, v2, theta2, g, b):
     p += v1 * v1 *   g11
     q += v1 * v1 * - b11
     return p, q
+
+
+def shift_angle(v, shift, rtrn_ab=True):
+    if isinstance(v, AlphaBeta):
+        v = v.to_polar()
+    v.theta += shift  # (-) Shifts to the right / forwards in time, (+) Shifts to the left / backwards in time
+    if rtrn_ab:
+        v = v.to_alpha_beta()
+    return v
+
 
 if __name__ == "__main__":
     from numpy import testing

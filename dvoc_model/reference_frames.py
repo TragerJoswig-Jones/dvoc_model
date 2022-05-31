@@ -3,6 +3,7 @@ from enum import Enum
 from dvoc_model.constants import *
 from numpy import sin, cos, arctan2, pi, sqrt
 
+
 class RefFrames(Enum):
     ALPHA_BETA = 1
     POLAR = 2
@@ -80,7 +81,7 @@ class AlphaBeta:
             gamma = self.gamma * other
             return AlphaBeta(alpha, beta, gamma)
         elif isinstance(other, AlphaBeta):
-            throw(NotImplemented)
+            raise NotImplemented
 
     def __truediv__(self, other):
         if isinstance(other, (int, float, complex)):
@@ -89,7 +90,8 @@ class AlphaBeta:
             gamma = self.gamma / other
             return AlphaBeta(alpha, beta, gamma)
         elif isinstance(other, AlphaBeta):
-            throw(NotImplemented)
+            raise NotImplemented
+
 
 @dataclass
 class Dq0:
@@ -179,7 +181,6 @@ def convert_state_ref(x, fr_ref, to_ref):
     elif fr_ref is RefFrames.ALPHA_BETA:
         x_ref = AlphaBeta(x[0], x[1], 0).to_polar()
     return x_ref
-
 
 if __name__ == "__main__":
     sin_cos = SinCos.from_theta(0)

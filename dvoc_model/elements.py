@@ -1,5 +1,7 @@
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames, convert_state_ref
 from dvoc_model.constants import *
+from dvoc_model.calculations import calculate_power
+from dvoc_model import shift_angle
 import numpy as np
 
 
@@ -37,6 +39,17 @@ class Component:
         if self.ref is RefFrames.POLAR:
             self.states[1,0] %= (2*np.pi)
 
+    def update_output(self):
+        if hasattr(self, 'output'):
+            self.output = self.states[:, 0].copy()
+
+    def collect_states(self, internal=False):
+        if hasattr(self, 'output') and not internal:
+            states = self.output
+        else:
+            states = self.states[:, 0]
+        return states
+
 
 class Node(Component):
     def __init__(self, x, ref=RefFrames.ALPHA_BETA):
@@ -59,39 +72,33 @@ class Node(Component):
             NotImplementedError()
         return states
 
-    def v_polar(self):
+    def v_polar(self, internal=False):
+        states = self.collect_states(internal=internal)
         if self.ref is RefFrames.ALPHA_BETA:
-            v_polar = AlphaBeta(self.states[0,0], self.states[1,0], 0).to_polar()
+            v_polar = AlphaBeta(states[0], states[1], 0).to_polar()
             return v_polar.r, v_polar.theta
         elif self.ref is RefFrames.POLAR:
-            return self.states[0,0], self.states[1,0]
+            return states[0], states[1]
         return None
 
-    def v_alpha_beta(self):
+    def v_alpha_beta(self, internal=False):
+        states = self.collect_states(internal=internal)
         if self.ref is RefFrames.ALPHA_BETA:
-            return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+            return AlphaBeta(states[0], states[1], 0)
         elif self.ref is RefFrames.POLAR:
-            return AlphaBeta.from_polar(self.states[0,0], self.states[1,0])
+            return AlphaBeta.from_polar(states[0], states[1])
         return None
 
-    def v_alpha(self):
-        if self.ref is RefFrames.ALPHA_BETA:
-            return self.states[0,0]
-        elif self.ref is RefFrames.POLAR:
-            return AlphaBeta.from_polar(self.v[0], self.theta[0]).alpha
-        return None
+    def v_alpha(self, internal=False):
+        return self.v_alpha_beta(internal=internal).alpha
 
-    def v_beta(self):
-        if self.ref is RefFrames.ALPHA_BETA:
-            return self.states[1,0]
-        elif self.ref is RefFrames.POLAR:
-            return AlphaBeta.from_polar(self.v[0], self.theta[0]).beta
-        return None
+    def v_beta(self, internal=False):
+        return self.v_alpha_beta(internal=internal).beta
 
     def collect_voltage_states(self, x):
         if self.ref is RefFrames.ALPHA_BETA:
             if x is None:
-                v = self.v_alpha_beta()
+                v = self.v_alpha_beta(internal=True)
                 v_alpha = v.alpha
                 v_beta = v.beta
             else:
@@ -99,7 +106,7 @@ class Node(Component):
             return v_alpha, v_beta
         elif self.ref is RefFrames.POLAR:
             if x is None:
-                v, theta = self.states[:,0]
+                v, theta = self.v_polar(internal=True)
             else:
                 v, theta = x[0], x[1]
             return v, theta
@@ -113,11 +120,12 @@ class Edge(Component):
         super().__init__(x, ref)
 
     def curr_states(self):
-        return self.states[:,0]
+        return self.states[:, 0]
 
-    def i_alpha_beta(self):
+    def i_alpha_beta(self, internal=False):
+        states = self.collect_states(internal=internal)
         if self.ref is RefFrames.ALPHA_BETA:
-            return AlphaBeta(self.states[0,0], self.states[1,0], 0)
+            return AlphaBeta(states[0], states[1], 0)
         else:
             raise NotImplemented
 
@@ -132,8 +140,8 @@ class Grid(Node):
     def polar_dynamics(self, x=None, t=None, u=None):
         return np.array([0, self.omega])
 
-    def v_alpha_beta(self):
-        return AlphaBeta.from_polar(self.states[0,0], self.states[1,0])
+    #def v_alpha_beta(self):
+    #    return AlphaBeta.from_polar(self.states[0,0], self.states[1,0])
 
 
 class Line(Edge):
@@ -192,8 +200,8 @@ class LineToGrid:
     def v_alpha_beta(self):
         return self.grid.v_alpha_beta()
 
-    def i_alpha_beta(self):
-        return self.line.i_alpha_beta()
+    def i_alpha_beta(self, internal=False):
+        return self.line.i_alpha_beta(internal=internal)
 
     def dynamics(self, t=0, x=None):
         if x is None:
@@ -220,18 +228,20 @@ class LineToGrid:
         self.grid.step_states()
 
 
-class LCL_Filter(Edge):
+class LCL_Filter(Edge):  # TODO: Split this into line and capacitor elements
     def __init__(self,
                  fr: Node,
                  to: Node,
                  rf1: float,
                  lf1: float,
-                 c: float = 4.7e-6,  # 4.7uF
+                 c: float = 10e-6,  # 4.7uF used before
+                 rc: float = 0.05,
                  rf2: float = None,
                  lf2: float = None,
                  v_nom: float = 120.,
                  i_ab: AlphaBeta = AlphaBeta.from_polar(0, 0),
-                 ref: RefFrames = RefFrames.ALPHA_BETA
+                 ref: RefFrames = RefFrames.ALPHA_BETA,
+                 meas_side=0,
                  ):
         v = AlphaBeta.from_polar(v_nom, 0)
         super().__init__((i_ab.alpha, i_ab.beta, v.alpha, v.beta, i_ab.alpha, i_ab.beta), ref)
@@ -240,6 +250,7 @@ class LCL_Filter(Edge):
         self.rf2 = rf1 if rf2 is None else rf2
         self.lf2 = lf1 if lf2 is None else lf2
         self.c = c
+        self.rc = rc
         self.fr = fr
         self.to = to
         fr.set_line(self)
@@ -251,6 +262,8 @@ class LCL_Filter(Edge):
         else:
             self.state_names = np.array([None, None])
         self.n_states = len(self.state_names)
+
+        self.meas_side = meas_side
 
     def alpha_beta_dynamics(self, x=(None, None), t=0, u=None):
         if u is None:
@@ -271,19 +284,25 @@ class LCL_Filter(Edge):
             vc_alpha, vc_beta = x[2], x[3]
             i2_alpha, i2_beta = x[4], x[5]
 
-        i1_dx_alpha = 1/self.lf1*(v1.alpha - vc_alpha - self.rf1*i1_alpha)
-        i1_dx_beta = 1/self.lf1*(v1.beta - vc_beta - self.rf1*i1_beta)
+        ic_alpha = i1_alpha - i2_alpha
+        ic_beta = i1_beta - i2_beta
 
-        v_dx_alpha = 1/self.c*(i1_alpha - i2_alpha)
-        v_dx_beta = 1/self.c*(i1_beta - i2_beta)
+        i1_dx_alpha = 1/self.lf1*(v1.alpha - (vc_alpha + self.rc * ic_alpha) - self.rf1*i1_alpha)
+        i1_dx_beta = 1/self.lf1*(v1.beta - (vc_beta + self.rc * ic_beta) - self.rf1*i1_beta)
+
+        v_dx_alpha = 1/self.c * ic_alpha
+        v_dx_beta = 1/self.c * ic_beta
 
         i2_dx_alpha = 1/self.lf2*(vc_alpha - v2.alpha - self.rf2*i2_alpha)
         i2_dx_beta = 1/self.lf2*(vc_beta - v2.beta - self.rf2*i2_beta)
 
         return np.array([i1_dx_alpha, i1_dx_beta, v_dx_alpha, v_dx_beta, i2_dx_alpha, i2_dx_beta])
 
-    def i_alpha_beta(self):
-        return AlphaBeta(self.states[0,0], self.states[1,0], 0)  # TODO: Make this grid side current?
+    def i_alpha_beta(self, internal=True):
+        if self.meas_side == 0:
+            return AlphaBeta(self.states[0, 0], self.states[1, 0], 0)
+        else:
+            return AlphaBeta(self.states[4, 0], self.states[5, 0], 0)
 
 
 class Load(Node):
@@ -326,7 +345,6 @@ class System:
             cmpnt.state_idx = curr_state_idx
             curr_state_idx += cmpnt.n_states
 
-
     def dynamics(self, t=0, x=None):
         system_dynamics = []
         for cmpnt in self.components:
@@ -338,13 +356,18 @@ class System:
                     if hasattr(dependent_cmpnt, 'state_idx'):
                         u_cmpnt = x[dependent_cmpnt.state_idx:dependent_cmpnt.state_idx + dependent_cmpnt.n_states,0]
                     else:
-                        u_cmpnt = dependent_cmpnt.states[:,0]
+                        u_cmpnt = dependent_cmpnt.collect_states()  # TODO: Change this to a function?
                     u_cmpnt_ref = convert_state_ref(u_cmpnt, dependent_cmpnt.ref, cmpnt.ref)
                     u.append(u_cmpnt_ref)  # TODO: Or use extend and get a full list?
             else:
                 u = None
-            cmpnt_dxdt = cmpnt.dynamics(cmpnt_states, t, u=u)
-            system_dynamics.extend(cmpnt_dxdt)
+            if issubclass(type(cmpnt), Component):
+                cmpnt_dxdt = cmpnt.dynamics(cmpnt_states, t, u=u)
+                system_dynamics.extend(cmpnt_dxdt)
+            elif issubclass(type(cmpnt), Meter):  # TODO: Unsure how to deal with the variable step
+                meas_dot = cmpnt.measure(cmpnt_states, t, u=u)
+                # meas_delta = meas - cmpnt_states
+                system_dynamics.extend(meas_dot)
 
         return system_dynamics
 
@@ -353,3 +376,35 @@ class System:
             # TODO: Make this directly put the new states values in the current index of the cmpnt states?
             cmpnt.states = self.states[cmpnt.state_idx: cmpnt.state_idx + cmpnt.n_states,:]
             cmpnt.step_states()
+
+
+class Meter:  # TODO: Should this be a subclass of a component for use in a System?
+    def __init__(self):
+        pass
+
+    def measure(self, x, t, u):
+        return None
+
+    def step_states(self):
+        self.states[:, [1, 0]] = self.states[:, [0, 1]]
+
+
+class PowerMeter(Meter):
+    def __init__(self, volt_src, curr_src, omega=0.):
+        super().__init__()
+        self.volt_src = volt_src
+        self.curr_src = curr_src
+        self.angle_shift_coef = omega / 2
+        self.wc = 1000.0
+        self.dependent_cmpnts = [volt_src, curr_src]
+        self.n_states = 2
+        self.states = np.array([[0, None], [0, None]])
+        self.ref = RefFrames.ALPHA_BETA  # Power calculations done in alpha-beta reference frame
+
+    def measure(self, x, t, u=None):
+        v = self.volt_src.v_alpha_beta() if u is None else AlphaBeta(u[0][0], u[0][1], 0)
+        i = self.curr_src.i_alpha_beta() if u is None else AlphaBeta(u[1][0], u[1][1], 0)
+        p, q = calculate_power(v, i)
+        pdot = self.wc * (p - x[0])
+        qdot = self.wc * (q - x[1])
+        return pdot, qdot
