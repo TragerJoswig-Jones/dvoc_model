@@ -3,7 +3,7 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta, RefFrames
 from dvoc_model.constants import *
-from dvoc_model.simulate import simulate, shift_controller_angle_half
+from dvoc_model.simulate import simulate, shift_controller_angle
 from dvoc_model import shift_angle
 from dvoc_model.elements import Node
 from dvoc_model.calculations import *
@@ -67,11 +67,11 @@ class Dvoc(Node):
         self.dt = dt
 
         # TODO: Add dependant components array
-        self.dependent_cmpnts = [self.line]
+        self.dependent_cmpnts = []
         self.n_states = self.states.shape[0]
 
         if start_eq:
-            shift_controller_angle_half(self, self.ref, self.omega_nom, self.dt)
+            shift_controller_angle(self, self.ref, -self.omega_nom, self.dt, 0.5)
 
         if ref is RefFrames.POLAR:
             self.state_names = ["v", "theta"]
@@ -82,36 +82,12 @@ class Dvoc(Node):
         v, theta = self.collect_voltage_states(x)
         v_ab = AlphaBeta.from_polar(v, theta)
         i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()
-        # TODO: Determine if this helps multi-step methods. It does not... first method helps FE that's it
-        """
-        if u is None:  # Only when not using a system solver
-            # Trying to find average power over interrupt period
-            #idq = i.to_dq0(SinCos.from_theta(self.v_polar()[1]))  # Convert to DQ using starting voltage angle
-            #theta_ = self.v_polar()[1]
-            #theta_dt = theta_ + self.omega_nom * self.dt
-            #p1 = sin(theta_dt) * (v_ab.alpha * idq.d + v_ab.beta * idq.q) + cos(theta_dt) * (v_ab.alpha * idq.q - v_ab.beta * idq.d)
-            #p2 = sin(theta_) * (v_ab.alpha * idq.d + v_ab.beta * idq.q) + cos(theta_) * (v_ab.alpha * idq.q - v_ab.beta * idq.d)
-            #p = 1.5 / self.dt * (p2 - p1) / self.omega_nom
-            #q1 = sin(theta_dt) * (v_ab.beta * idq.d - v_ab.alpha * idq.q) + cos(theta_dt) * (v_ab.alpha * idq.d + v_ab.beta * idq.q)
-            #q2 = sin(theta_) * (v_ab.beta * idq.d - v_ab.alpha * idq.q) + cos(theta_) * (v_ab.alpha * idq.d + v_ab.beta * idq.q)
-            #q = 1.5 / self.dt * (q2 - q1) / self.omega_nom
-            #self.p, self.q = p, q
-
-            # Trying to shift curent with voltage angle
-            # idq = i.to_dq0(SinCos.from_theta(self.v_polar()[1]))  # Convert to DQ using starting voltage angle
-            #i = idq.to_alpha_beta(SinCos.from_theta(theta))  # Convert back to ab using predicted voltage angle
-
-            # Try shifting current halfway such that P = Pref at the middle of the interrupt period
-            idq = i.to_dq0(SinCos.from_theta(0))  # Convert to DQ using starting voltage angle
-            i = idq.to_alpha_beta(SinCos.from_theta(-self.omega_nom * self.dt / 2))  # Convert back to ab using predicted voltage angle
-        """
+        idq = i.to_dq0(SinCos.from_theta(theta))
 
         # Power Calculation
-        #self.p, self.q = calculate_power(shift_angle(v_ab, -self.omega_nom*self.dt/2), i)
-        self.p, self.q = calculate_power(v_ab, i)
-
-        # TODO: Should this be phase shifted to compensate for ZOH?
-        # TODO: Phase-shift in current due to ADC sampling ZOH makes this moot?
+        #v_ab = self.v_alpha_beta() # TODO: Testing with static voltage value for power calc
+        self.p, self.q = calculate_power(v_ab, i)  # Calculate in AlphaBeta frame
+        # p, q = calculate_polar_power(v, theta, i)  # Calculate in DQ frame
 
         # dVOC Control
         kvki_3cv = self.k_v * self.k_i / (3 * self.c * v)
@@ -123,8 +99,10 @@ class Dvoc(Node):
     def alpha_beta_dynamics(self, x=None, t=None, u=None):
         v_alpha, v_beta = self.collect_voltage_states(x)
         i = self.line.i_alpha_beta() if u is None else AlphaBeta(u[0][0], u[0][1], 0)
+        i = shift_angle(i, 0.005, rtrn_ab=True)
         v = AlphaBeta(v_alpha, v_beta, 0)
 
+        vtest = self.v_alpha_beta() # TODO: Test with static voltage value for current ref calc
         ia_ref, ib_ref = calculate_current(v, self.p_ref, self.q_ref)
         i_ref = AlphaBeta(ia_ref, ib_ref, 0)
         i_err = i - i_ref

@@ -10,17 +10,17 @@ class Component:
         self.ref = ref
         if isinstance(x, AlphaBeta):
             if ref is RefFrames.ALPHA_BETA:
-                x1 = np.array([x.alpha, None])
-                x2 = np.array([x.beta, None])
+                x1 = np.array([x.alpha, x.alpha])
+                x2 = np.array([x.beta, x.beta])
             else:
                 x = x.to_polar()
-                x1 = np.array([x[0], None])
-                x2 = np.array([x[1], None])
+                x1 = np.array([x[0], x[0]])
+                x2 = np.array([x[1], x[1]])
             self.states = np.array([x1, x2])
         else:
             states = []
             for val in x:
-                states.append([val, None])
+                states.append([val, val])
             self.states = np.array(states)
 
     def dynamics(self, x=None, t=None, u=None):
@@ -34,10 +34,13 @@ class Component:
             NotImplementedError("%s reference frame not implemented" % self.ref)
     
     def step_states(self):
-        self.states[:,0] = self.states[:,1]
-        self.states[:,1] = None
+        # TEST: STORE LAST STATE FOR ADAM BASHFORTH TEST
+        last_state = np.array(self.states[:, 0])
+        self.states[:, 0] = self.states[:, 1]
+        #self.states[:, 1] = None
+        self.states[:, 1] = last_state
         if self.ref is RefFrames.POLAR:
-            self.states[1,0] %= (2*np.pi)
+            self.states[1, 0] %= (2*np.pi)
 
     def update_output(self):
         if hasattr(self, 'output'):
@@ -95,6 +98,12 @@ class Node(Component):
     def v_beta(self, internal=False):
         return self.v_alpha_beta(internal=internal).beta
 
+    def collect_states_fr_x(self, x):
+        if x is not None:
+            return x
+        else:
+            return self.states[:, 0]
+
     def collect_voltage_states(self, x):
         if self.ref is RefFrames.ALPHA_BETA:
             if x is None:
@@ -151,7 +160,8 @@ class Line(Edge):
                  rf: float,
                  lf: float,
                  i_ab: AlphaBeta = AlphaBeta.from_polar(0, 0),
-                 ref: RefFrames = RefFrames.ALPHA_BETA
+                 ref: RefFrames = RefFrames.ALPHA_BETA,
+                 v_nom: float = 120.,
                  ):
         super().__init__((i_ab.alpha, i_ab.beta), ref)
         self.rf = rf
@@ -339,11 +349,14 @@ class System:
                  components
                  ):
         self.components = components
-        self.states = np.vstack([cmpnt.states for cmpnt in components])
+        self.gather_cmp_states()  # TODO: Test if this works
         curr_state_idx = 0
         for cmpnt in components:
             cmpnt.state_idx = curr_state_idx
             curr_state_idx += cmpnt.n_states
+
+    def gather_cmp_states(self):
+        self.states = np.vstack([cmpnt.states for cmpnt in self.components])
 
     def dynamics(self, t=0, x=None):
         system_dynamics = []
@@ -390,12 +403,11 @@ class Meter:  # TODO: Should this be a subclass of a component for use in a Syst
 
 
 class PowerMeter(Meter):
-    def __init__(self, volt_src, curr_src, omega=0.):
+    def __init__(self, volt_src, curr_src, wc):
         super().__init__()
         self.volt_src = volt_src
         self.curr_src = curr_src
-        self.angle_shift_coef = omega / 2
-        self.wc = 1000.0
+        self.wc = wc
         self.dependent_cmpnts = [volt_src, curr_src]
         self.n_states = 2
         self.states = np.array([[0, None], [0, None]])

@@ -136,15 +136,16 @@ def simulate(controller, p_refs, q_refs, dt=1 / 10e3, t=500e-3, Lf=1.5e-3, Rf=0.
     return data
 
 
-def shift_controller_angle_half(controller, ref, omega_nom, dt):
+def shift_controller_angle(controller, ref, omega_nom, dt, periods):
     """ Shifts the angle of the given controller voltage by half of a step according to the nominal frequency.
         This shifts the controllers voltage to be closer to the equilibrium if the output is a zero order hold.
     """
     if ref is RefFrames.POLAR:
-        controller.states[1,0] += omega_nom / 2 * dt  # (+) Shifts the controller voltage waveform left / backward
+        controller.states[1,0] += omega_nom * periods * dt  # (+) Shifts the controller voltage waveform left / backward
     else:
         vrms = np.sqrt(controller.states[0,0]**2 + controller.states[1,0]**2) / np.sqrt(2)
-        v = AlphaBeta.from_polar(vrms, omega_nom / 2 * dt)
+        theta = np.atan2(controller.states[1,0] / controller.states[0,0])
+        v = AlphaBeta.from_polar(vrms, theta + omega_nom * periods * dt)
         controller.states[0,0] = v.alpha
         controller.states[1,0] = v.beta
 
@@ -158,11 +159,13 @@ def collect_sim_info(data_dict, controller, grid, line, method,
     vg = grid.v_alpha_beta(internal=False)
     vab = controller.v_alpha_beta(internal=False)
     iab = line.i_alpha_beta(internal=False)
+    i_grid_ab = line.states[4:6, 0]
+    iab_grid = AlphaBeta(i_grid_ab[0], i_grid_ab[1], 0)
     v_abc = vab.to_abc()
     i_abc = iab.to_abc()
     p, q = calculate_power(vab, iab)
     if not continuous:
-        # p, q = calculate_power(shift_angle(vab, -controller.omega_nom * controller.dt / 2), iab)
+        #p, q = calculate_power(shift_angle(vab, -controller.omega_nom * controller.dt / 2), iab)
         # theta = theta - controller.omega_nom * controller.dt / 2  # Shift to theta at center of stepped waveform steps
         pass
     data_dict['v_alpha, %s, %s' % (method, ref_frame.name)].append(vab.alpha)
@@ -181,7 +184,11 @@ def collect_sim_info(data_dict, controller, grid, line, method,
     data_dict['i_c, %s, %s' % (method, ref_frame.name)].append(i_abc.c)
     data_dict['p, %s, %s' % (method, ref_frame.name)].append(p)
     data_dict['q, %s, %s' % (method, ref_frame.name)].append(q)
+    data_dict['ig_alpha, %s, %s' % (method, ref_frame.name)].append(iab_grid.alpha)  # TEST
+    data_dict['ig_beta, %s, %s' % (method, ref_frame.name)].append(iab_grid.beta)  # TEST
 
     if ode_dict is not None:
         ode_dict['T_ode, %s, %s' % (method, ref_frame.name)] = t_ode
         ode_dict['Y_ode, %s, %s' % (method, ref_frame.name)] = y_ode
+
+    return p, q

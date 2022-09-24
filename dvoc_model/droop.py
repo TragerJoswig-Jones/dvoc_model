@@ -3,7 +3,7 @@ import numpy as np
 
 from dvoc_model.reference_frames import SinCos, Abc, Dq0, AlphaBeta
 from dvoc_model.constants import *
-from dvoc_model.simulate import simulate, shift_controller_angle_half
+from dvoc_model.simulate import simulate, shift_controller_angle
 from dvoc_model.elements import Node, RefFrames
 from dvoc_model.calculations import calculate_power
 
@@ -15,12 +15,14 @@ class Droop(Node):
                  m_p: float = 2.6e-3,
                  m_q: float = 5.0e-3,
                  v_nom: float = 120.,
+                 s_rated: float = 1000.,
                  hz_nom: float = 60,
                  varphi: float = pi / 2,
                  omega_c: float = 2 * pi * 30,
                  ref: RefFrames = RefFrames.POLAR,
                  dt: float = 1.0 / 10e3,
                  start_eq: bool = True,
+                 output_hold_periods: int = 1,
                  ):
 
         # set droop controller parameters
@@ -50,15 +52,18 @@ class Droop(Node):
             v = AlphaBeta.from_polar(self.v_nom, 0)
             super().__init__((v.alpha, v.beta, p_filt, q_filt), ref)
 
+        self.dependent_cmpnts = []
+        self.n_states = self.states.shape[0]
+
         if start_eq:
-            shift_controller_angle_half(self, self.ref, self.omega_nom, self.dt)
+            shift_controller_angle(self, self.ref, self.omega_nom, self.dt, 0.5)
 
         if ref is RefFrames.POLAR:
             self.state_names = ["v", "theta", "p,filt", "q,filt"]
         else:
             self.state_names = ["v,alpha", "v,beta", "p,filt", "q,filt"]
 
-    def low_pass_dynamics(self, x, y_filt):  # TODO: Search how to derive discretization of low pass
+    def low_pass_dynamics(self, x, y_filt):
         return self.omega_c * (x - y_filt)
 
     def update_states(self):
@@ -93,16 +98,11 @@ class Droop(Node):
         return np.array([dvdt, omega, p_filt_dt, q_filt_dt])
 
     def polar_dynamics(self, x=None, t=None, u=None):
-        # Power Calculation
-        if x is None:
-            x = self.states[:, 0]
-        v_ab = AlphaBeta.from_polar(x[0], x[1])
-        v = x[0]
-        theta = x[1]
-        p_filt = x[2]
-        q_filt = x[3]
+        v, theta, p_filt, q_filt = self.collect_states_fr_x(x)
+        v_ab = AlphaBeta.from_polar(v, theta)
+        i = self.line.i_alpha_beta() if u is None else u[0].to_alpha_beta()
 
-        i = self.line.i_alpha_beta()
+        # Power Calculation
         p, q = calculate_power(v_ab, i)
 
         # Low-Pass Filter
@@ -113,7 +113,7 @@ class Droop(Node):
         q_err = q_filt - self.q_ref
 
         # Droop Control
-        dvdt = (self.v_nom - self.m_q * q) - v
+        dvdt = - self.m_q * q_filt_dt
         omega = self.omega_nom - self.m_p * p_err
         return np.array([dvdt, omega, p_filt_dt, q_filt_dt])
 

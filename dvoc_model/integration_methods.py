@@ -50,6 +50,23 @@ def semi_implicit_euler_step(dt, components, set_states=True, update_states=Fals
     return dxs
 
 
+def semi_implicit_euler2_step(dt, components, set_states=True, update_states=False):
+    k1s = forward_euler_step(dt, components, set_states=set_states, update_states=False)  # Estimation Step
+    for k1 in k1s: k1[0] = 0  # Zero out step for v_alpha / voltage
+    dxs = []
+    for component, k1 in zip(components, k1s):
+        k2dt = component.dynamics(component.states[:,0] + k1)
+        k2dt[1] = 0  # Zero out step for v_beta / theta
+        dx = k1 + k2dt * dt
+        if set_states:
+            component.states[:, 1] = component.states[:, 0] + dx
+        dxs.append(dx)
+    if update_states:
+        for component in components:
+            component.step_states()
+    return dxs
+
+
 def rk2_step(dt, components, set_states=True, update_states=False):
     k1s = forward_euler_step(dt, components, set_states=set_states, update_states=False)  # Estimation Step
 
@@ -79,6 +96,21 @@ def taylor2_step(dt, components, set_states=True, update_states=False):
         dx = (k1dt + k1ddt * dt * 0.5) * dt  # TODO: 1.9994: (120.0001) in iso, 1.985 match cont in cont_sim
         if set_states:
             component.states[:,1] = component.states[:,0] + dx
+        dxs.append(dx)
+    if update_states:
+        for component in components:
+            component.step_states()
+    return dxs
+
+
+def adam_bashforth_step(dt, components, set_states=True, update_states=False):
+    dxs = []
+    for component in components:
+        k0dt = component.dynamics(component.states[:, 1])  # Previous state values dynamics
+        k1dt = component.dynamics(component.states[:, 0])
+        dx = (k1dt * 1.5 - k0dt * 0.5) * dt
+        if set_states:
+            component.states[:, 1] = component.states[:, 0] + dx
         dxs.append(dx)
     if update_states:
         for component in components:

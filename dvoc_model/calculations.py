@@ -1,10 +1,22 @@
 import numpy as np
-from dvoc_model.reference_frames import AlphaBeta
+from dvoc_model.reference_frames import AlphaBeta, SinCos
 
 
 def calculate_power(v, i):
     p = 1.5 * (v.alpha * i.alpha + v.beta * i.beta)
     q = 1.5 * (v.beta * i.alpha - v.alpha * i.beta)
+    return p, q
+
+
+def calculate_polar_power(v, theta, i):
+    """ Calculate power in the DQZ reference frame of the given polar voltage
+        v: Voltage magnitude
+        theta: Voltage angle
+        i: AlpheBeta current
+    """
+    idq = i.to_dq0(SinCos.from_theta(theta))
+    p = 1.5 * np.sqrt(2) * v * idq.d
+    q = -1.5 * np.sqrt(2) * v * idq.q
     return p, q
 
 
@@ -28,7 +40,7 @@ def angle_diff(theta1, theta2, deg=False):
     else:
         try:
             delta = [-2*np.pi + d if d > np.pi else d for d in delta]
-            delta = [2*np.pi + d if d <= np.pi else d for d in delta]
+            delta = [2*np.pi + d if d <= -np.pi else d for d in delta]
         except TypeError:
             if delta > np.pi:
                 delta = -(2 * np.pi) + delta
@@ -37,7 +49,7 @@ def angle_diff(theta1, theta2, deg=False):
     return delta
 
 
-def power_flow_2_bus(v1, theta1, v2, theta2, g, b):
+def power_flow_2_bus(v1, theta1, v2, theta2, g, b, n_phase=3):
     """ Calculate the power flow from bus 1 to bus 2 across the line with admittance g+jb
         from the given voltages and angles.
     """
@@ -53,7 +65,7 @@ def power_flow_2_bus(v1, theta1, v2, theta2, g, b):
 
     p += v1 * v1 *   g11
     q += v1 * v1 * - b11
-    return p, q
+    return p * n_phase, q * n_phase
 
 
 def shift_angle(v, shift, rtrn_ab=True):

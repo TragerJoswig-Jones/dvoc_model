@@ -51,10 +51,13 @@ class AlphaBeta:
         z = self.gamma
         return Dq0(d, q, z)
 
-    def to_polar(self):
+    def to_polar(self, obj=True):
         v = sqrt(self.alpha**2 + self.beta**2) / sqrt(2)
         theta = arctan2(self.beta, self.alpha)
-        return Polar(v, theta)
+        if obj:
+            return Polar(v, theta)
+        else:
+            return v, theta
 
     def to_abc(self):
         a = self.alpha + self.gamma
@@ -170,6 +173,18 @@ class Polar:
 
     def deg(self):
         return self.theta * 180 / pi
+
+    def __sub__(self, other):
+        return Polar(self.r - other.r, self.theta - other.theta)
+
+    def __add__(self, other):
+        return Polar(self.r + other.r, self.theta + other.theta)
+
+    def __mul__(self, other):
+        if isinstance(other, (int, float, complex)):
+            return Polar(self.r * other, self.theta * other)
+        elif isinstance(other, Polar):
+            raise NotImplemented
 
 
 def convert_state_ref(x, fr_ref, to_ref):
